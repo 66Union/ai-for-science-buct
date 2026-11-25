@@ -96,6 +96,13 @@ def _stem_variants(name: str) -> set[str]:
 
 
 def _family_for(field_name: str) -> str | None:
+    # Fields we do not produce must not fall through to a neighbouring family just
+    # because of a shared prefix: "page_headers" matched "page" and received the
+    # whole page array - wrong type, and silently wrong content.
+    normalised = re.sub(r"[^a-z0-9]+", "_", (field_name or "").casefold())
+    if any(token in normalised for token in ("header", "footer", "footnote",
+                                             "caption", "affiliation")):
+        return None
     variants = _stem_variants(field_name)
     flat_keys = {k.replace("_", ""): v for k, v in FAMILY_STEMS.items()}
     for v in variants:
@@ -334,10 +341,20 @@ def _run_body(out_dir_override: str | None) -> int:
             status=status, limits=limits, uncertainty=uncertainty,
             change_log=change_log, task_md_path=found["task_md_path"])
         payload["meta"]["contract_field_mapping"] = mapping_report
-        # keep the full technical payload available, but outside the contract block
-        payload["meta"]["additional_outputs"] = {
+        # keep the full technical payload available, but outside the contract block.
+        # `evidence` is already carried in meta.evidence and `document.pages` is the
+        # same array as the page field: re-emitting them inflated result.json by
+        # roughly 4.5x on the fixture and scales with paper length.
+        extra_outputs = {
             k: v for k, v in values.items() if k not in set(mapping_report.values())
         }
+        extra_outputs.pop("evidence", None)
+        document_payload = extra_outputs.get("document")
+        if isinstance(document_payload, dict) and "pages" in document_payload:
+            extra_outputs["document"] = {
+                k: v for k, v in document_payload.items() if k != "pages"
+            }
+        payload["meta"]["additional_outputs"] = extra_outputs
 
     target = contract.write_result(out_dir, payload)
 

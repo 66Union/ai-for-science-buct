@@ -228,9 +228,11 @@ def supported_modes(package: Path, script: Path) -> set[str]:
     """Which phase flags does this runner accept? (not every skill needs two phases)"""
     env = dict(os.environ)
     env["PYTHONPATH"] = str(package)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     try:
         proc = subprocess.run([sys.executable, str(script), "--help"], env=env,
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True, timeout=60,
+                              encoding="utf-8", errors="replace")
         text = (proc.stdout or "") + (proc.stderr or "")
     except Exception:
         return set()

@@ -1,0 +1,146 @@
+{
+  "version": "1.0.0",
+  "description": "Controlled vocabulary for the reading-15 literature knowledge graph. Node and relation types are closed lists; a relation outside the list is kept but flagged relation_known=false.",
+  "node_types": {
+    "researcher": "a person or author named in the material",
+    "material": "a physical material, sample, compound, catalyst or reagent",
+    "method": "a method, technique, instrument or procedure",
+    "task": "a research task, reaction, benchmark, dataset or problem setting",
+    "metric": "a measured quantity, performance metric or indicator",
+    "conclusion": "a finding or claim stated by the paper",
+    "dataset": "a named dataset or corpus",
+    "concept": "a concept that does not fit the other types",
+    "other": "a real entity whose type is not in this schema"
+  },
+  "relation_types": {
+    "uses": {
+      "direction": "directed",
+      "definition": "source uses or applies target"
+    },
+    "applies_to": {
+      "direction": "directed",
+      "definition": "source applies to target"
+    },
+    "evaluates_on": {
+      "direction": "directed",
+      "definition": "source is evaluated on target"
+    },
+    "outperforms": {
+      "direction": "directed",
+      "definition": "source performs better than target"
+    },
+    "improves": {
+      "direction": "directed",
+      "definition": "source improves, raises or reduces target"
+    },
+    "characterizes": {
+      "direction": "directed",
+      "definition": "source method characterizes target material"
+    },
+    "supports": {
+      "direction": "directed",
+      "definition": "source evidence supports a target claim"
+    },
+    "contradicts": {
+      "direction": "directed",
+      "definition": "source contradicts target"
+    },
+    "causes": {
+      "direction": "directed",
+      "definition": "source causes or leads to target"
+    },
+    "proposes": {
+      "direction": "directed",
+      "definition": "source proposes or presents target"
+    },
+    "is_a": {
+      "direction": "directed",
+      "definition": "source is a kind of target"
+    },
+    "compares_with": {
+      "direction": "undirected",
+      "definition": "source and target are compared"
+    },
+    "part_of": {
+      "direction": "directed",
+      "definition": "source is part of target"
+    },
+    "co_occurs": {
+      "direction": "undirected",
+      "definition": "deterministic fallback: same paragraph; a relation is explicitly NOT asserted"
+    },
+    "other": {
+      "direction": "unspecified",
+      "definition": "a real relation whose type is not in this schema"
+    }
+  },
+  "relation_aliases": {
+    "use": "uses",
+    "used": "uses",
+    "using": "uses",
+    "employs": "uses",
+    "applies": "uses",
+    "utilizes": "uses",
+    "based_on": "uses",
+    "via": "uses",
+    "apply": "applies_to",
+    "applied_to": "applies_to",
+    "evaluated_on": "evaluates_on",
+    "tested_on": "evaluates_on",
+    "benchmarked_on": "evaluates_on",
+    "trained_on": "evaluates_on",
+    "measured_on": "evaluates_on",
+    "better_than": "outperforms",
+    "superior_to": "outperforms",
+    "improved_over": "outperforms",
+    "exceeds": "outperforms",
+    "surpasses": "outperforms",
+    "compare": "compares_with",
+    "compared_with": "compares_with",
+    "compared_to": "compares_with",
+    "vs": "compares_with",
+    "characterises": "characterizes",
+    "measured_by": "characterizes",
+    "analyzed_by": "characterizes",
+    "support": "supports",
+    "supported_by": "supports",
+    "confirms": "supports",
+    "consistent_with": "supports",
+    "contradict": "contradicts",
+    "conflicts_with": "contradicts",
+    "inconsistent_with": "contradicts",
+    "cause": "causes",
+    "leads_to": "causes",
+    "results_in": "causes",
+    "due_to": "causes",
+    "propose": "proposes",
+    "introduces": "proposes",
+    "presents": "proposes",
+    "develops": "proposes",
+    "improve": "improves",
+    "enhances": "improves",
+    "increases": "improves",
+    "reduces": "improves",
+    "is_a_kind_of": "is_a",
+    "part_of": "part_of",
+    "co_occurrence": "co_occurs",
+    "cooccurs": "co_occurs"
+  },
+  "merge_rules": {
+    "same_surface": "identical normalised surface (case, hyphen, space and slash insensitive)",
+    "acronym_definition": "the material itself defines acronym and full form (Full Name (ABC) pattern)",
+    "agent_alias": "the alias is declared by the agent in nodes.json and matches another node label",
+    "never_merge": "different declared types on the same surface are a homonym: the nodes stay separate and the conflict is recorded"
+  },
+  "strength_levels": {
+    "strong": "explicit verb links both endpoints in one sentence (score 0.9)",
+    "moderate": "explicit verb present but separated across clauses (score 0.6)",
+    "weak": "trigger found but the relation is not directly asserted (score 0.35)",
+    "co_occurrence": "same paragraph only; relation NOT asserted (score 0.2)"
+  },
+  "evidence_rules": {
+    "node": "an anchor must locate the label in the cited paragraph and the quote must mention the label",
+    "edge": "the quote must contain BOTH endpoint labels and be a verbatim substring of the cited paragraph",
+    "locator": "paragraph_id is the publisher/JATS paragraph id; a PDF page is reported only when the material is a real PDF"
+  }
+}

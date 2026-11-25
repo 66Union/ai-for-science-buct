@@ -1,0 +1,152 @@
+{
+  "version": "1.0.0",
+  "vocab_uri": "https://w3id.org/np/skill-reading14/vocab#",
+  "default_relation": "states",
+  "direction_rule": "subject is the entity the assertion is about; object is the entity/value it is related to. 'subject->object' means the subject performs/owns the relation.",
+  "confidence_basis": {
+    "base": 0.55,
+    "quote_exact": 0.15,
+    "quote_normalised": 0.08,
+    "atomic": 0.1,
+    "relation_in_vocab": 0.1,
+    "max": 0.95
+  },
+  "relations": [
+    {
+      "relation": "supports",
+      "definition": "The evidence or result supports a hypothesis, model or earlier claim.",
+      "direction": "subject->object",
+      "cues": [
+        "support",
+        "supports",
+        "supported",
+        "evidence for",
+        "consistent with",
+        "confirm",
+        "confirms",
+        "confirmed",
+        "in line with",
+        "corroborat",
+        "agrees with"
+      ]
+    },
+    {
+      "relation": "contradicts",
+      "definition": "The result conflicts with a claim, hypothesis or earlier finding.",
+      "direction": "subject->object",
+      "cues": [
+        "contradict",
+        "contradicts",
+        "contradicted",
+        "inconsistent with",
+        "conflict with",
+        "conflicts with",
+        "unlike",
+        "challenge",
+        "challenges",
+        "fails to reproduce",
+        "does not support"
+      ]
+    },
+    {
+      "relation": "uses",
+      "definition": "The study uses a method, material, instrument or dataset.",
+      "direction": "subject->object",
+      "cues": [
+        "use",
+        "uses",
+        "used",
+        "using",
+        "employ",
+        "employs",
+        "employed",
+        "adopt",
+        "adopts",
+        "based on",
+        "relies on",
+        "rely on",
+        "with the aid of"
+      ]
+    },
+    {
+      "relation": "measures",
+      "definition": "A quantity, rate, yield or property is measured and given a value.",
+      "direction": "subject->object",
+      "cues": [
+        "measure",
+        "measures",
+        "measured",
+        "quantif",
+        "yield",
+        "yields",
+        "yielded",
+        "was found to be",
+        "reached",
+        "achieved",
+        "recorded",
+        "was determined to be"
+      ]
+    },
+    {
+      "relation": "derived_from",
+      "definition": "A value, model or sample is derived or computed from another source.",
+      "direction": "subject->object",
+      "cues": [
+        "derived from",
+        "derive",
+        "derives",
+        "computed from",
+        "calculated from",
+        "obtained from",
+        "estimated from",
+        "inferred from"
+      ]
+    },
+    {
+      "relation": "part_of",
+      "definition": "A component, subunit or sub-process belongs to a larger entity.",
+      "direction": "subject->object",
+      "cues": [
+        "part of",
+        "component of",
+        "belongs to",
+        "subunit",
+        "member of",
+        "contained in",
+        "incorporated into"
+      ]
+    },
+    {
+      "relation": "states",
+      "definition": "The source text directly states a fact, observation or claim (default relation).",
+      "direction": "subject->object",
+      "cues": [
+        "report",
+        "reports",
+        "reported",
+        "show",
+        "shows",
+        "shown",
+        "find",
+        "finds",
+        "found",
+        "observe",
+        "observes",
+        "observed",
+        "demonstrate",
+        "demonstrates",
+        "demonstrated",
+        "state",
+        "states",
+        "claim",
+        "claims",
+        "describe",
+        "describes",
+        "indicate",
+        "indicates",
+        "suggest",
+        "suggests"
+      ]
+    }
+  ]
+}

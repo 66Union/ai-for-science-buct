@@ -190,3 +190,58 @@ git -C <repo> config http.sslBackend openssl
 但同一台机器用 Node `fetch` 访问 `https://github.com/` 返回 200 —— 即 IP 没被封，挡的是浏览器指纹。
 结论：**账号必须在用户自己的常规浏览器里注册**；建好账号后本机可用 git(openssl)+PAT 推送。
 
+
+---
+
+## 12. 共享内核 v2（2026-11-25 晚新增，10 题共用）
+
+为“写作/翻译类”题目补了两阶段混合框架与产物工具，全部零第三方依赖：
+
+| 模块 | 作用 |
+|---|---|
+| `lib/hybrid.py` | 两阶段框架：`write_placeholder`（启动即落占位 result.json）、`build_segments`（段落级切分，带 page/block/bbox/section）、`make_batches`/`missing_batches`/`load_generated`/`merge_generated`（Agent 分批生成与覆盖率校验）、`term_candidates`/`find_numbers`/`find_citations`/`find_hedges`（机器可判事实）、`preservation_check`（改写守恒断言）、`finalize`（契约反射 + result/evidence/run_report 落盘）、`map_fields`（声明字段 ↔ 内部产物的别名匹配） |
+| `lib/docwrite.py` | 纯标准库写 .docx（OOXML zip）/ .md / .html；`write_editable()` 一次写三份，供审阅与预览 |
+| `lib/render.py` | 渲染探测：soffice/libreoffice/office-renderer → PDF；pdftoppm/pdftocairo/mutool/magick/gs → PNG；latexmk/xelatex/pdflatex/tectonic/latex-compiler → PDF。**找不到就如实记录，不伪造** |
+| `lib/extract.py`（改） | docx/pptx 增加纯标准库 OOXML 兜底（python-docx 缺失时仍能读） |
+
+配套工具：
+
+| 工具 | 作用 |
+|---|---|
+| `tools/e2e_check.py` | **独立验收门**：造 /input 形状沙盒（case.json+task.md+environment/ 材料），跑打包后的 runner，校验 result.json 存在/合法/含 case_id 与全部契约字段/status 诚实；另测无契约、无材料两条失败路径（不崩、有产出） |
+| `tools/package_skill.py`（改） | 除展平 `_core/{lib,scripts,tests}` 外，还会把题目目录下的 `scripts/`、`tests/`、`resources/` 覆盖进包；继续强制 50 文件 / 500KB / 2MB / 无符号链接 |
+| `tools/submit_plan.json` | 9 题提交顺序与 challenge-id 清单 |
+| `tools/submit_batch.py` | 批量 dry-run / 提交驱动；逐题记录 attempt_id、bundle 哈希、配额快照到 `out/submit-log.jsonl`；平台拒绝即停 |
+
+### 12.1 打包 + 独立验收（每题）
+
+```powershell
+$py = "C:\Users\86188\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
+& $py "D:\AI-for-science\tools\package_skill.py" "<challenge-dir>" "D:\AI-for-science\out\submit-<challenge-dir>"
+$env:PYTHONPATH = "D:\AI-for-science\out\submit-<challenge-dir>"
+& $py "D:\AI-for-science\tools\e2e_check.py" --package "D:\AI-for-science\out\submit-<challenge-dir>"
+```
+
+`e2e_check.py` 的 PASS 是提交前的硬门槛：它验的是平台唯一强制的东西（result.json 契约形状），而不是我们自己的测试。
+
+### 12.2 批量提交
+
+```powershell
+# 1) 先用当前会话日志生成 trace 并校验
+node "D:\AI-for-science\tools\dsh2trace.mjs" --session session-0945b7b3-f4d2-48d1-babb-b0b1e7dbf6e9 --out "D:\AI-for-science\.tmp\trace-final.jsonl"
+& "D:\AI-for-science\.tools\playground.cmd" trace validate --trace "D:\AI-for-science\.tmp\trace-final.jsonl"
+
+# 2) 全部 dry-run（不消耗配额、不发提交）
+& $py "D:\AI-for-science\tools\submit_batch.py" --trace .tmp/trace-final.jsonl --dry-run
+
+# 3) 正式提交（自动带 --harness deepseek-harness --model deepseek-flash）
+& $py "D:\AI-for-science\tools\submit_batch.py" --trace .tmp/trace-final.jsonl --submit
+```
+
+### 12.3 Harbor 任务包的公开事实（来自 `playground task guide`）
+
+- 题目包 = `instruction.md` + `task.toml` + `environment/**`（Agent 可见）+ `tests/**`（**隐藏**，`tests/test.sh` 必须写 `/logs/verifier/reward.json`）+ 可选 `solution/`。
+- 论文类输入的标准路径是 **`environment/reference/paper.pdf`**，资源清单在 **`environment/resources.yaml`**。
+- 有隐藏 verifier 且会产出 reward → 排行榜分数 = reward×100 的推断成立；人工评审（9 题）另行打分。
+- 下载接口只能拿 `challenge.json`/`config.json`/`task.md`，**拿不到 `environment/` 与隐藏测试**；`interface-example` 资源同理不可下载。契约字段名只能靠反射，不能提前知道 —— 这再次确认“禁止硬编码 schema”是唯一正确解。
+

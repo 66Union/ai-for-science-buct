@@ -1,0 +1,329 @@
+{
+  "name": "latex_error_taxonomy",
+  "version": "1.0.0",
+  "description": "Reusable taxonomy of LaTeX static and compile-time defects: Chinese label, root cause, severity, fixability and the usual repair strategy. run_latex.py merges this file over its built-in fallback, so the table can be extended without touching code.",
+  "error_types": {
+    "missing_documentclass": {
+      "label_zh": "缺少 \\documentclass",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "主文件没有声明文档类，TeX 无法决定版面与可用命令。",
+      "typical_fix": "在主文件首部加入 \\documentclass[选项]{类名}，并与模板要求的类一致。"
+    },
+    "missing_begin_document": {
+      "label_zh": "缺少 \\begin{document}",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "导言区与正文区没有分隔，正文环境缺失。",
+      "typical_fix": "在导言区结束后加入 \\begin{document}。"
+    },
+    "missing_end_document": {
+      "label_zh": "缺少 \\end{document}",
+      "severity": "error",
+      "fixable": true,
+      "root_cause": "文件在正文中途结束，TeX 会报 Emergency stop 并丢掉后续排版。",
+      "typical_fix": "在文件末尾补 \\end{document}。"
+    },
+    "missing_end_environment": {
+      "label_zh": "环境未闭合",
+      "severity": "error",
+      "fixable": true,
+      "root_cause": "\\begin{env} 没有配对的 \\end{env}，环境栈错位会让其后所有内容报错。",
+      "typical_fix": "在合适位置补上 \\end{env}，或修正配对的 \\begin。"
+    },
+    "unexpected_end_environment": {
+      "label_zh": "环境结束标签多余",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "出现了没有 \\begin 的 \\end，通常由复制粘贴或条件编译残留导致。",
+      "typical_fix": "删除多余的 \\end{env}，或补上缺失的 \\begin{env}。"
+    },
+    "unbalanced_brace": {
+      "label_zh": "花括号失衡",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "分组括号数量不配对；TeX 会在文件末尾才报错，真实位置往往在上文。",
+      "typical_fix": "从报错行向前定位分组起点，补齐或删除多余的 { 或 }。"
+    },
+    "unbalanced_math_dollar": {
+      "label_zh": "行内数学 $ 未配对",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "行内公式的 $ 数量为奇数，后续正文会被当作数学模式。",
+      "typical_fix": "为缺失的 $ 补上配对，或改用 \\( \\)。"
+    },
+    "missing_input_file": {
+      "label_zh": "\\input/\\include 目标不存在",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "被引用文件路径写错或文件未随稿件提交，编译会直接中止。",
+      "typical_fix": "修正路径或补交被引用文件；也可临时注释该行。"
+    },
+    "missing_class_file": {
+      "label_zh": "文档类文件缺失",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "模板 .cls 不在工程内，也不是 TeX 发行版自带类，编译时找不到。",
+      "typical_fix": "把模板 .cls 放到主文件同目录（或 \\documentclass 能解析的路径），并确认版本。"
+    },
+    "template_class_unused": {
+      "label_zh": "工程内模板类未被使用",
+      "severity": "warning",
+      "fixable": false,
+      "root_cause": "工程里有 .cls 但主文件用的是其它类，投稿模板要求未生效。",
+      "typical_fix": "按任务要求把 \\documentclass 指向模板类，并保留模板必需字段。"
+    },
+    "missing_bib_entry": {
+      "label_zh": "\\cite 的文献条目缺失",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "正文引用了 .bib 中不存在的 key，PDF 会印出 [?]。",
+      "typical_fix": "在 .bib 中补条目（元数据必须来自材料，不得编造），或修正 key。"
+    },
+    "uncited_bib_entry": {
+      "label_zh": "文献库条目未被引用",
+      "severity": "info",
+      "fixable": false,
+      "root_cause": "条目存在于 .bib 但正文没有 \\cite，参考文献表会漏项或多余。",
+      "typical_fix": "确认是否需要引用；不需要则删除条目，需要则在正文补 \\cite。"
+    },
+    "missing_bibliography": {
+      "label_zh": "缺少参考文献命令",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "正文有 \\cite 但没有 \\bibliography/\\addbibresource，无法生成文献表。",
+      "typical_fix": "加入 \\bibliography{refs} 或 biblatex 的 \\addbibresource{refs.bib} 与 \\printbibliography。"
+    },
+    "bib_duplicate_key": {
+      "label_zh": ".bib 条目 key 重复",
+      "severity": "warning",
+      "fixable": false,
+      "root_cause": "同一 key 定义两次，BibTeX 只认其中一条并报警告。",
+      "typical_fix": "保留元数据更完整的一条，删除或重命名重复条目。"
+    },
+    "bib_entry_incomplete": {
+      "label_zh": ".bib 条目字段不全",
+      "severity": "warning",
+      "fixable": false,
+      "root_cause": "条目缺少 title/year 等必需字段，参考文献表会出现空白。",
+      "typical_fix": "从材料补齐字段；材料里没有的字段不要臆造。"
+    },
+    "duplicate_label": {
+      "label_zh": "\\label 重复定义",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "同一 label 出现两次，\\ref 会指向后一个，编号引用不可信。",
+      "typical_fix": "重命名其中一个 label，并同步其 \\ref。"
+    },
+    "undefined_reference": {
+      "label_zh": "\\ref 未定义",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "引用了不存在的 label，PDF 会印出 ??，需多轮编译才能暴露。",
+      "typical_fix": "补 \\label 或修正引用 key；若同名 label 近似则直接改用正确 key。"
+    },
+    "duplicate_package": {
+      "label_zh": "宏包重复加载",
+      "severity": "warning",
+      "fixable": true,
+      "root_cause": "同一宏包被 \\usepackage 多次，选项冲突时会报错。",
+      "typical_fix": "保留第一次加载（并合并选项），删除重复行。"
+    },
+    "package_conflict": {
+      "label_zh": "宏包冲突",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "两个宏包功能重叠或选项互斥，后加载者覆盖前者。",
+      "typical_fix": "按模板要求保留一个，删除或替换冲突宏包。"
+    },
+    "deprecated_package": {
+      "label_zh": "使用了过时宏包",
+      "severity": "warning",
+      "fixable": true,
+      "root_cause": "过时宏包在新发行版上行为不稳定或与模板冲突。",
+      "typical_fix": "换成等价的现代宏包（如 epsfig -> graphicx）。"
+    },
+    "package_load_order": {
+      "label_zh": "宏包加载顺序不合理",
+      "severity": "warning",
+      "fixable": false,
+      "root_cause": "hyperref 等宏包必须靠后加载，顺序错误会引发连锁报错。",
+      "typical_fix": "调整 \\usepackage 顺序：基础宏包在前，hyperref 靠后，cleveref 在 hyperref 之后。"
+    },
+    "cjk_without_package": {
+      "label_zh": "CJK 文本缺少中文支持",
+      "severity": "error",
+      "fixable": true,
+      "root_cause": "源码含中日韩字符但没加载 ctex/xeCJK 等宏包，编译会报 missing character。",
+      "typical_fix": "加载 ctex 宏包并改用 xelatex 编译，或按模板要求使用对应中文模板类。"
+    },
+    "todo_placeholder": {
+      "label_zh": "残留占位标记",
+      "severity": "warning",
+      "fixable": false,
+      "root_cause": "源码仍有 TODO/FIXME/待补 等占位，交稿前必须处理。",
+      "typical_fix": "补写内容或删除标记；不能确定的标注人工确认。"
+    },
+    "table_column_mismatch": {
+      "label_zh": "表格列数与列格式不符",
+      "severity": "warning",
+      "fixable": false,
+      "root_cause": "某行 & 个数与 tabular 列格式不一致，表格会错列或溢出。",
+      "typical_fix": "对齐该行 & 数量，或调整 tabular 列格式与列宽。"
+    },
+    "template_required_field": {
+      "label_zh": "模板必填字段缺失",
+      "severity": "warning",
+      "fixable": false,
+      "root_cause": "模板要求的标题/作者/摘要等字段缺失，版面会出现空白或占位。",
+      "typical_fix": "按模板要求补 \\title/\\author/摘要环境，内容必须来自材料。"
+    },
+    "utf8_bom": {
+      "label_zh": "源码带 UTF-8 BOM",
+      "severity": "warning",
+      "fixable": false,
+      "root_cause": "Windows 编辑器写入的 BOM 会让部分引擎在首行报错或产生空白页。",
+      "typical_fix": "以无 BOM UTF-8 保存；本技能交付的 out/source 已统一去除 BOM。"
+    },
+    "encoding_not_utf8": {
+      "label_zh": "源码不是 UTF-8",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "GBK/Latin-1 编码在 UTF-8 引擎下会乱码或报 Invalid UTF-8 bytes。",
+      "typical_fix": "转存为 UTF-8，并保留原文内容不变。"
+    },
+    "encoding_null_byte": {
+      "label_zh": "源码含 NUL 字节",
+      "severity": "warning",
+      "fixable": false,
+      "root_cause": "二进制混入或截断文件，编译器会忽略或报错。",
+      "typical_fix": "重新导出该文件为纯文本。"
+    },
+    "missing_package": {
+      "label_zh": "宏包未安装",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "TeX 发行版里没有该 .sty/.cls，编译在第一处就停止。",
+      "typical_fix": "安装对应宏包，或按模板要求替换为镜像内已有的等价宏包。"
+    },
+    "missing_file": {
+      "label_zh": "文件找不到",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "\\input / \\includegraphics / 类文件路径错误或未随稿提交。",
+      "typical_fix": "修正相对路径或补齐文件；注意编译工作目录。"
+    },
+    "undefined_control_sequence": {
+      "label_zh": "未定义命令",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "命令拼错、缺少对应宏包，或该命令属于另一套模板。",
+      "typical_fix": "核对命令拼写与所属宏包；补齐 \\usepackage 或改用模板提供的命令。"
+    },
+    "environment_undefined": {
+      "label_zh": "环境未定义",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "该环境来自未加载的宏包，或环境名拼写错误。",
+      "typical_fix": "加载对应宏包（如 amsmath/定理类宏包）或修正环境名。"
+    },
+    "runaway_argument": {
+      "label_zh": "参数失控（Runaway argument）",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "花括号/环境未闭合，TeX 把后续大段内容吞进当前命令参数。",
+      "typical_fix": "从报错位置向前找未闭合的分组或环境。"
+    },
+    "missing_dollar": {
+      "label_zh": "缺少数学定界符",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "数学模式未正确进入或退出，行内公式的 $ 不配对。",
+      "typical_fix": "补齐 $ 配对，或改用 \\( \\)。"
+    },
+    "extra_brace": {
+      "label_zh": "多余的花括号",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "参数后多了 }，TeX 把它当作分组结束并报错。",
+      "typical_fix": "删除多余右括号，检查该命令参数个数。"
+    },
+    "emergency_stop": {
+      "label_zh": "紧急停止",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "上文存在致命错误（常为环境未闭合或参数失控），TeX 放弃排版。",
+      "typical_fix": "先修复日志中更早的 ! 错误，不要只处理这一条。"
+    },
+    "font_not_found": {
+      "label_zh": "字体不可用",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "镜像缺少该字体或字体名写错，XeLaTeX/LuaLaTeX 无法加载。",
+      "typical_fix": "换用发行版自带字体，或在模板允许的范围内注释字体设置。"
+    },
+    "package_error": {
+      "label_zh": "宏包报错",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "宏包内部检查失败，通常是参数、版本或与其它宏包冲突。",
+      "typical_fix": "阅读该宏包手册对应选项，按模板要求调整参数或去掉冲突宏包。"
+    },
+    "latex_error": {
+      "label_zh": "LaTeX 报错",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "LaTeX 层错误，日志中该条 ! 之后通常有真实位置 l.N。",
+      "typical_fix": "定位日志中的 l.N 行，按错误说明修正该行语法。"
+    },
+    "fatal_error": {
+      "label_zh": "致命错误",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": "编译器无法继续，通常由缺文件、缺宏包或编码错误引起。",
+      "typical_fix": "先解决日志首条致命错误，再重跑多轮编译。"
+    },
+    "bibtex_error": {
+      "label_zh": "BibTeX 错误",
+      "severity": "error",
+      "fixable": false,
+      "root_cause": ".aux/.bib 不匹配或条目语法错误，文献表无法生成。",
+      "typical_fix": "检查 .bib 语法与 key，确认 \\bibliography 指向正确文件。"
+    },
+    "undefined_citation": {
+      "label_zh": "文献引用未定义",
+      "severity": "warning",
+      "fixable": false,
+      "root_cause": "引用的 key 不在文献库中，或 BibTeX 尚未运行。",
+      "typical_fix": "补条目/修 key，并确保编译顺序为 latex -> bibtex -> latex -> latex。"
+    },
+    "rerun_required": {
+      "label_zh": "需要再次编译",
+      "severity": "info",
+      "fixable": false,
+      "root_cause": "交叉引用/目录/编号尚未收敛，单轮编译不能定稿。",
+      "typical_fix": "再编译一到两轮，直到日志不再提示 Rerun。"
+    },
+    "overfull_hbox": {
+      "label_zh": "内容溢出（Overfull hbox）",
+      "severity": "warning",
+      "fixable": false,
+      "root_cause": "某行或表格超出版心，经常由长公式、宽表格或不可断行字符串引起。",
+      "typical_fix": "调整列宽/断行/字号，不要靠缩小整页掩盖。"
+    },
+    "underfull_hbox": {
+      "label_zh": "排版过松（Underfull hbox）",
+      "severity": "info",
+      "fixable": false,
+      "root_cause": "换行拉伸过大，通常是长段落或强制换行导致。",
+      "typical_fix": "一般可忽略；若版式明显异常再调整断行。"
+    },
+    "compile_other": {
+      "label_zh": "其他编译问题",
+      "severity": "warning",
+      "fixable": false,
+      "root_cause": "日志中未归类的提示，需要人工阅读上下文。",
+      "typical_fix": "查看 build_log_excerpt 中该条前后的日志。"
+    }
+  }
+}

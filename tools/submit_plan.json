@@ -1,0 +1,49 @@
+{
+  "entries": [
+    {
+      "dir": "writing-04-reference-management",
+      "challenge_id": "product-arena-03-429cc14d",
+      "title": "写作04｜参考文献与引用管理"
+    },
+    {
+      "dir": "reading-03-translation",
+      "challenge_id": "product-arena-01-5a9928c1",
+      "title": "阅读03｜文献翻译"
+    },
+    {
+      "dir": "writing-02-language-polish",
+      "challenge_id": "product-arena-02-7051d92d",
+      "title": "写作02｜学术语言润色"
+    },
+    {
+      "dir": "reading-10-summary-notes",
+      "challenge_id": "product-arena-06-6d8cf72b",
+      "title": "阅读10｜文献总结与结构化笔记"
+    },
+    {
+      "dir": "reading-14-nanopublication",
+      "challenge_id": "product-arena-09-0e8befd4",
+      "title": "阅读14｜Nanopublication"
+    },
+    {
+      "dir": "reading-15-knowledge-graph",
+      "challenge_id": "product-arena-10-760d1a0b",
+      "title": "阅读15｜文献知识图谱构建"
+    },
+    {
+      "dir": "writing-08-intro-related-work",
+      "challenge_id": "product-arena-04-4b82ad21",
+      "title": "写作08｜引言与相关工作写作"
+    },
+    {
+      "dir": "writing-09-methods-experiments",
+      "challenge_id": "product-arena-05-64faa4a2",
+      "title": "写作09｜方法与实验章节写作"
+    },
+    {
+      "dir": "writing-13-latex-compilation",
+      "challenge_id": "product-arena-07-865de7e4",
+      "title": "写作13｜LaTeX 写作与编译"
+    }
+  ]
+}

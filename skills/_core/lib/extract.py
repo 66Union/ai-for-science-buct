@@ -21,10 +21,12 @@ topic scores honesty about limits, so nothing here is hidden from the caller.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
 import time
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -345,14 +347,79 @@ def _safe_blocks(doc: dict[str, Any], attempts: list[str]) -> dict[str, list[dic
     return blocks
 
 
-def _extract_plain(p: Path) -> dict[str, Any]:
-    """Non-PDF material (JATS XML, docx, tex, md) → page-level text."""
-    text = ""
-    try:
-        if p.suffix.lower() == ".docx":
-            import docx  # python-docx
+_DOCX_PARA_RE = re.compile(r"<w:p[ >].*?</w:p>", re.S)
+_DOCX_TEXT_RE = re.compile(r"<w:t(?:\s[^>]*)?>(.*?)</w:t>", re.S)
+_DOCX_TAB_RE = re.compile(r"<w:tab\s*/?>")
+_DOCX_BREAK_RE = re.compile(r"<w:br\s*/?>")
+_XML_TEXT_RE = re.compile(r"<[^>]+>")
 
-            text = "\n".join(par.text for par in docx.Document(str(p)).paragraphs)
+
+def _docx_text_zip(p: Path) -> str:
+    """Read the text out of a .docx with the standard library only.
+
+    python-docx is used when present, but the evaluation image is only promised to
+    provide a generic scientific Python stack, so a writing task must not fail just
+    because python-docx is absent. A .docx is a zip with word/document.xml, and the
+    paragraph/text elements are enough for text extraction.
+    """
+    try:
+        with zipfile.ZipFile(str(p)) as archive:
+            names = [n for n in archive.namelist() if n == "word/document.xml"]
+            if not names:
+                return ""
+            xml = archive.read(names[0]).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    paragraphs: list[str] = []
+    for paragraph_xml in _DOCX_PARA_RE.findall(xml):
+        inner = _DOCX_TEXT_RE.findall(paragraph_xml)
+        text = "".join(inner)
+        text = _DOCX_TAB_RE.sub("\t", text)
+        text = _DOCX_BREAK_RE.sub("\n", text)
+        text = _XML_TEXT_RE.sub("", text)
+        text = (text.replace("&amp;", "&").replace("&lt;", "<")
+                    .replace("&gt;", ">").replace("&quot;", '"').replace("&apos;", "'"))
+        if text.strip():
+            paragraphs.append(text.strip())
+    return "\n".join(paragraphs)
+
+
+def _pptx_text_zip(p: Path) -> str:
+    """Slide text from a .pptx using the standard library only."""
+    try:
+        with zipfile.ZipFile(str(p)) as archive:
+            slides = sorted(n for n in archive.namelist()
+                            if n.startswith("ppt/slides/slide") and n.endswith(".xml"))
+            chunks: list[str] = []
+            for name in slides:
+                xml = archive.read(name).decode("utf-8", errors="replace")
+                texts = re.findall(r"<a:t>(.*?)</a:t>", xml, re.S)
+                if texts:
+                    chunks.append(f"[[slide {name.rsplit('/', 1)[-1]}]]\n"
+                                  + "\n".join(texts))
+            return "\n".join(chunks)
+    except Exception:
+        return ""
+
+
+def _extract_plain(p: Path) -> dict[str, Any]:
+    """Non-PDF material (JATS XML, docx, pptx, tex, md) -> page-level text."""
+    text = ""
+    warnings: list[str] = []
+    suffix = p.suffix.lower()
+    try:
+        if suffix == ".docx":
+            try:
+                import docx  # python-docx, when the image provides it
+
+                text = "\n".join(par.text for par in docx.Document(str(p)).paragraphs)
+                warnings.append("read with python-docx")
+            except Exception:
+                text = _docx_text_zip(p)
+                warnings.append("read with the standard-library OOXML fallback")
+        elif suffix == ".pptx":
+            text = _pptx_text_zip(p)
+            warnings.append("read with the standard-library OOXML fallback")
         else:
             text = p.read_text(encoding="utf-8", errors="replace")
     except Exception as exc:
@@ -371,7 +438,7 @@ def _extract_plain(p: Path) -> dict[str, Any]:
         "pages": [page],
         "text_layer": bool(text.strip()),
         "total_chars": len(text),
-        "warnings": ["non-PDF input: coordinates are synthetic, anchors are page+line"],
+        "warnings": warnings + ["non-PDF input: coordinates are synthetic, anchors are page+line"],
         "anchor_quality": "page",
         "blocks": {"1": pdftext.blocks(page)},
     }

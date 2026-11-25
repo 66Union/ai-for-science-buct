@@ -94,10 +94,15 @@ def main() -> int:
         shutil.copy2(challenge_dir / name, out / name)
         written.append(out / name)
 
-    # optional per-challenge resources
-    resources = challenge_dir / "resources"
-    if resources.is_dir():
-        written.extend(_copy_tree(resources, out / "resources"))
+    # Per-challenge code and resources: the adapter runner, its tests/fixtures and any
+    # templates or dictionaries live next to the SKILL.md during development, but the
+    # platform installs a single flat directory, so fold them into the same layout the
+    # core uses (scripts/, tests/, resources/). Copied after the core so a challenge
+    # file overrides a same-named core file deliberately.
+    for part in ("scripts", "tests", "resources"):
+        src = challenge_dir / part
+        if src.is_dir():
+            written.extend(_copy_tree(src, out / part))
 
     # ---- limit checks -------------------------------------------------------
     violations: list[str] = []

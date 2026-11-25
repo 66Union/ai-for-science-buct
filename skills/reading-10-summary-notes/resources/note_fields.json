@@ -1,0 +1,273 @@
+{
+  "version": "1.0.0",
+  "schema": "reading10/note_fields/1.0",
+  "note": "Controlled vocabulary for the reading-10 adapter. The script can run without this file (built-in defaults) but the prompts/keywords here drive candidate ranking and the worksheet, so keeping it with the skill is what makes the notes field-complete and section-aligned.",
+  "sentinel_not_reported": "not reported",
+  "limits": {
+    "max_note_chars": 320,
+    "max_quote_chars": 400,
+    "max_baseline_notes_per_segment": 2,
+    "max_segments": 400,
+    "max_key_points": 120
+  },
+  "anchor_format": {
+    "page": "int, 1-based page number as printed by the extraction engine",
+    "block_id": "string, paragraph block id such as 'p2-b3'",
+    "bbox": "[x0, y0, x1, y1] floats, PDF convention (origin bottom-left, y up)",
+    "quote": "verbatim span copied from that block; must not be paraphrased",
+    "kind": "content = the note asserts something the quote must mention; structural = the note is about where something is"
+  },
+  "card_fields": [
+    {
+      "key": "research_question",
+      "zh": "研究问题",
+      "prompt": "用一句话写论文要回答的核心问题（可含子问题），并给出 seg_id 与原文引文。",
+      "keywords": [
+        "we investigate",
+        "we study",
+        "here we",
+        "we aim",
+        "objective",
+        "purpose",
+        "research question",
+        "this study",
+        "this work",
+        "本研究",
+        "本文",
+        "目的",
+        "问题",
+        "探讨",
+        "考察",
+        "检验"
+      ],
+      "section_hints": [
+        "abstract",
+        "introduction",
+        "摘要",
+        "引言",
+        "前言"
+      ]
+    },
+    {
+      "key": "data",
+      "zh": "数据与材料",
+      "prompt": "数据、样本、语料、材料是什么：名称、规模、来源、时间或空间范围；没有就写 not reported 并说明。",
+      "keywords": [
+        "dataset",
+        "data",
+        "corpus",
+        "sample",
+        "participants",
+        "cohort",
+        "specimen",
+        "we used",
+        "collected",
+        "measured",
+        "n =",
+        "数据",
+        "样本",
+        "数据集",
+        "语料",
+        "采集",
+        "测量",
+        "材料"
+      ],
+      "section_hints": [
+        "abstract",
+        "method",
+        "data",
+        "results",
+        "摘要",
+        "方法",
+        "数据",
+        "结果"
+      ]
+    },
+    {
+      "key": "methods",
+      "zh": "方法与条件",
+      "prompt": "用了什么方法、模型、实验条件或分析流程，含关键参数与让结论成立的前提条件。",
+      "keywords": [
+        "method",
+        "approach",
+        "procedure",
+        "protocol",
+        "we performed",
+        "we prepared",
+        "we trained",
+        "we analyzed",
+        "model",
+        "simulation",
+        "temperature",
+        "condition",
+        "方法",
+        "实验",
+        "流程",
+        "模型",
+        "参数",
+        "条件",
+        "分析"
+      ],
+      "section_hints": [
+        "method",
+        "experiment",
+        "approach",
+        "materials and methods",
+        "方法",
+        "实验",
+        "材料与方法"
+      ]
+    },
+    {
+      "key": "findings",
+      "zh": "主要发现",
+      "prompt": "论文报告的主要结果是什么；尽量带上数值与单位，不要改写原文数值。",
+      "keywords": [
+        "we found",
+        "we observed",
+        "show",
+        "shows",
+        "increase",
+        "decrease",
+        "improved",
+        "reduced",
+        "higher",
+        "lower",
+        "significant",
+        "results",
+        "表明",
+        "发现",
+        "显著",
+        "提高",
+        "降低",
+        "结果",
+        "相比"
+      ],
+      "section_hints": [
+        "results",
+        "findings",
+        "results and discussion",
+        "结果",
+        "发现"
+      ]
+    },
+    {
+      "key": "conclusions",
+      "zh": "结论",
+      "prompt": "作者给出的结论是什么；区分证据支持的结论与推测，保留原文限定词（may / suggest / likely 等）。",
+      "keywords": [
+        "conclusion",
+        "we conclude",
+        "in summary",
+        "in conclusion",
+        "these results suggest",
+        "implication",
+        "结论",
+        "综上",
+        "因此",
+        "表明",
+        "提示",
+        "意义"
+      ],
+      "section_hints": [
+        "conclusion",
+        "discussion",
+        "summary",
+        "结论",
+        "讨论",
+        "总结"
+      ]
+    },
+    {
+      "key": "limitations",
+      "zh": "局限与前提",
+      "prompt": "结论成立的前提、作者承认的局限、未报告内容或未来工作；没有找到就写 not reported，不要补造。",
+      "keywords": [
+        "limitation",
+        "limitations",
+        "caveat",
+        "however",
+        "future work",
+        "further study",
+        "cannot",
+        "not measured",
+        "remain",
+        "uncertain",
+        "only",
+        "局限",
+        "不足",
+        "然而",
+        "未来",
+        "进一步",
+        "有待",
+        "尚不能"
+      ],
+      "section_hints": [
+        "limitation",
+        "discussion",
+        "conclusion",
+        "局限",
+        "讨论",
+        "结论"
+      ]
+    }
+  ],
+  "point_types": [
+    {
+      "code": "RQ",
+      "zh": "研究问题",
+      "use": "问题、目标、假设"
+    },
+    {
+      "code": "DATA",
+      "zh": "数据与材料",
+      "use": "数据集、样本、语料、材料、测量对象"
+    },
+    {
+      "code": "METHOD",
+      "zh": "方法与条件",
+      "use": "方法、模型、参数、实验条件、分析流程"
+    },
+    {
+      "code": "RESULT",
+      "zh": "结果",
+      "use": "带数值或方向性的观察结果"
+    },
+    {
+      "code": "CONCLUSION",
+      "zh": "结论",
+      "use": "作者的解释、结论、意义"
+    },
+    {
+      "code": "LIMITATION",
+      "zh": "局限与前提",
+      "use": "局限、前提、未报告、未来工作"
+    },
+    {
+      "code": "DEFINITION",
+      "zh": "定义与术语",
+      "use": "概念定义、缩写首次定义"
+    },
+    {
+      "code": "RELATION",
+      "zh": "章节承接",
+      "use": "本章与前后章节的衔接、引用关系"
+    },
+    {
+      "code": "GAP",
+      "zh": "缺口",
+      "use": "材料未给出、无法判断的项"
+    },
+    {
+      "code": "BASELINE",
+      "zh": "确定性抽取基线",
+      "use": "脚本兜底用的抽取式条目，Agent 不应使用"
+    }
+  ],
+  "section_alignment_rules": [
+    "每条笔记只归属一个 section（由 seg_id 自动继承），不跨节合并。",
+    "章节标题块本身只用于章节清单，不给它写内容笔记。",
+    "同一 section 内按 seg 顺序输出，笔记顺序即论证顺序。",
+    "材料未报告的内容写成 point_type=GAP，不要用推测补齐。"
+  ]
+}

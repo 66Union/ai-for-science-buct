@@ -1,0 +1,54 @@
+{
+  "schema": "writing-02-language-polish/style_profiles/v1",
+  "note": "Target register profiles injected into every batch worksheet. Files are the authoritative source; the runner has an identical minimal builtin fallback.",
+  "profiles": {
+    "journal": {
+      "label": "期刊/会议论文 (journal / conference paper)",
+      "voice": "impersonal, third person or passive voice where the field expects it",
+      "hedging": "keep the original hedging strength; never promote 'may' to 'does'",
+      "contractions": "forbidden",
+      "first_person": "avoid unless the source already uses 'we'",
+      "notes": "concise, information-dense sentences; no marketing adjectives; no undefined abbreviations"
+    },
+    "thesis": {
+      "label": "学位论文 (thesis / dissertation)",
+      "voice": "formal, explicit signposting allowed",
+      "hedging": "keep hedging; explanatory repetition is acceptable",
+      "contractions": "forbidden",
+      "first_person": "allowed where the source uses it",
+      "notes": "longer explanatory sentences are acceptable; keep chapter-level terminology stable"
+    },
+    "grant": {
+      "label": "基金申请书 (grant proposal)",
+      "voice": "active, forward-looking, concrete",
+      "hedging": "keep uncertainty about outcomes, do not overclaim feasibility",
+      "contractions": "forbidden",
+      "first_person": "'we propose / we will' is normal if present in the source",
+      "notes": "emphasise significance and feasibility without inventing preliminary data"
+    },
+    "review_response": {
+      "label": "审稿回复 (reviewer response)",
+      "voice": "courteous, direct, point-by-point",
+      "hedging": "do not concede more than the authors conceded in the source",
+      "contractions": "forbidden",
+      "first_person": "allowed",
+      "notes": "answer the concern first, then report the change; never invent new experiments"
+    },
+    "abstract": {
+      "label": "摘要 (abstract)",
+      "voice": "self-contained, no citations to sections",
+      "hedging": "keep the source's claim strength exactly",
+      "contractions": "forbidden",
+      "first_person": "follow the field convention of the source",
+      "notes": "one paragraph, no undefined abbreviations, no new numbers"
+    },
+    "unknown": {
+      "label": "未指定的学术文体 (unspecified academic register)",
+      "voice": "neutral academic",
+      "hedging": "keep the original hedging strength",
+      "contractions": "forbidden",
+      "first_person": "follow the source",
+      "notes": "minimal edit; flag what could not be determined"
+    }
+  }
+}

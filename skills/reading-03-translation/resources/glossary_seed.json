@@ -1,0 +1,246 @@
+{
+  "_comment": "Seed glossary for EN->ZH scientific translation. Discipline-neutral conventions only: section names, figure/table words, units kept in Latin script, and common hedging/attitude verbs. A case-provided term list always overrides this file. Fields: term, translation, keep_original, note.",
+  "version": "1.0.0",
+  "terms": [
+    {
+      "term": "Abstract",
+      "translation": "摘要",
+      "keep_original": false,
+      "note": "section heading"
+    },
+    {
+      "term": "Introduction",
+      "translation": "引言",
+      "keep_original": false,
+      "note": "section heading"
+    },
+    {
+      "term": "Methods",
+      "translation": "方法",
+      "keep_original": false,
+      "note": "section heading"
+    },
+    {
+      "term": "Materials and Methods",
+      "translation": "材料与方法",
+      "keep_original": false,
+      "note": "section heading"
+    },
+    {
+      "term": "Results",
+      "translation": "结果",
+      "keep_original": false,
+      "note": "section heading"
+    },
+    {
+      "term": "Results and Discussion",
+      "translation": "结果与讨论",
+      "keep_original": false,
+      "note": "section heading"
+    },
+    {
+      "term": "Discussion",
+      "translation": "讨论",
+      "keep_original": false,
+      "note": "section heading"
+    },
+    {
+      "term": "Conclusion",
+      "translation": "结论",
+      "keep_original": false,
+      "note": "section heading"
+    },
+    {
+      "term": "Conclusions",
+      "translation": "结论",
+      "keep_original": false,
+      "note": "section heading"
+    },
+    {
+      "term": "References",
+      "translation": "参考文献",
+      "keep_original": false,
+      "note": "section heading"
+    },
+    {
+      "term": "Supplementary Information",
+      "translation": "补充材料",
+      "keep_original": false,
+      "note": "section heading"
+    },
+    {
+      "term": "Figure",
+      "translation": "图",
+      "keep_original": false,
+      "note": "keep the following number, e.g. 图 2"
+    },
+    {
+      "term": "Table",
+      "translation": "表",
+      "keep_original": false,
+      "note": "keep the following number, e.g. 表 1"
+    },
+    {
+      "term": "Equation",
+      "translation": "式",
+      "keep_original": false,
+      "note": "keep the following number"
+    },
+    {
+      "term": "Eq.",
+      "translation": "式",
+      "keep_original": false,
+      "note": "keep the following number"
+    },
+    {
+      "term": "et al.",
+      "translation": "等",
+      "keep_original": true,
+      "note": "author list marker; keep 'et al.' or write 等"
+    },
+    {
+      "term": "vs.",
+      "translation": "vs.",
+      "keep_original": true,
+      "note": "kept as is"
+    },
+    {
+      "term": "in vitro",
+      "translation": "体外",
+      "keep_original": false,
+      "note": "Latin phrase"
+    },
+    {
+      "term": "in vivo",
+      "translation": "体内",
+      "keep_original": false,
+      "note": "Latin phrase"
+    },
+    {
+      "term": "significant",
+      "translation": "显著的",
+      "keep_original": false,
+      "note": "statistics flavour"
+    },
+    {
+      "term": "not significant",
+      "translation": "不显著",
+      "keep_original": false,
+      "note": "negation must survive"
+    },
+    {
+      "term": "may",
+      "translation": "可能",
+      "keep_original": false,
+      "note": "hedge: never harden into 会"
+    },
+    {
+      "term": "suggests",
+      "translation": "提示",
+      "keep_original": false,
+      "note": "hedge"
+    },
+    {
+      "term": "likely",
+      "translation": "可能",
+      "keep_original": false,
+      "note": "hedge"
+    },
+    {
+      "term": "probably",
+      "translation": "很可能",
+      "keep_original": false,
+      "note": "hedge"
+    },
+    {
+      "term": "approximately",
+      "translation": "约",
+      "keep_original": false,
+      "note": "hedge/quantity"
+    },
+    {
+      "term": "must",
+      "translation": "必须",
+      "keep_original": false,
+      "note": "modal obligation"
+    },
+    {
+      "term": "should",
+      "translation": "应当",
+      "keep_original": false,
+      "note": "modal obligation"
+    },
+    {
+      "term": "cannot",
+      "translation": "不能",
+      "keep_original": false,
+      "note": "negation must survive"
+    },
+    {
+      "term": "wt%",
+      "translation": "wt%",
+      "keep_original": true,
+      "note": "unit kept verbatim"
+    },
+    {
+      "term": "mol%",
+      "translation": "mol%",
+      "keep_original": true,
+      "note": "unit kept verbatim"
+    },
+    {
+      "term": "at.%",
+      "translation": "at.%",
+      "keep_original": true,
+      "note": "unit kept verbatim"
+    },
+    {
+      "term": "rpm",
+      "translation": "rpm",
+      "keep_original": true,
+      "note": "unit kept verbatim"
+    },
+    {
+      "term": "pH",
+      "translation": "pH",
+      "keep_original": true,
+      "note": "symbol kept verbatim"
+    },
+    {
+      "term": "XRD",
+      "translation": "X射线衍射",
+      "keep_original": true,
+      "note": "acronym: keep the Latin form at first use"
+    },
+    {
+      "term": "TEM",
+      "translation": "透射电子显微镜",
+      "keep_original": true,
+      "note": "acronym: keep the Latin form at first use"
+    },
+    {
+      "term": "SEM",
+      "translation": "扫描电子显微镜",
+      "keep_original": true,
+      "note": "acronym: keep the Latin form at first use"
+    },
+    {
+      "term": "NMR",
+      "translation": "核磁共振",
+      "keep_original": true,
+      "note": "acronym: keep the Latin form at first use"
+    },
+    {
+      "term": "ICP-OES",
+      "translation": "电感耦合等离子体发射光谱",
+      "keep_original": true,
+      "note": "acronym: keep the Latin form"
+    },
+    {
+      "term": "DFT",
+      "translation": "密度泛函理论",
+      "keep_original": true,
+      "note": "acronym: keep the Latin form at first use"
+    }
+  ]
+}

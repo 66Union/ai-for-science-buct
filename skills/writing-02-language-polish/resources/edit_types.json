@@ -1,0 +1,42 @@
+{
+  "schema": "writing-02-language-polish/edit_types/v1",
+  "note": "Controlled vocabulary of edit types accepted from the agent. Chinese labels are accepted and normalised to the ids. Any other value is kept but marked 'unspecified' with reason=unknown_type.",
+  "types": [
+    {
+      "id": "grammar",
+      "label_zh": "语法",
+      "definition": "subject-verb agreement, articles, prepositions, tense/aspect, number, dangling modifiers, run-on sentences",
+      "example": "was carried out -> was performed"
+    },
+    {
+      "id": "terminology",
+      "label_zh": "术语",
+      "definition": "domain term choice, abbreviation conventions, casing/hyphenation, cross-section consistency",
+      "example": "Ni-Si02 -> Ni/SiO2 (per glossary)"
+    },
+    {
+      "id": "tone",
+      "label_zh": "语气/语域",
+      "definition": "register, over-claiming, colloquial or promotional wording, person/voice misuse",
+      "example": "huge improvement -> a substantial improvement"
+    },
+    {
+      "id": "punctuation",
+      "label_zh": "标点",
+      "definition": "comma splice, serial comma, quotation marks, spaces around units/citations",
+      "example": "85 % -> 85%"
+    },
+    {
+      "id": "structure",
+      "label_zh": "结构",
+      "definition": "sentence splitting/merging, information order, topic-comment arrangement (no content change)",
+      "example": "split a 70-word sentence after the main clause"
+    },
+    {
+      "id": "chinese_english",
+      "label_zh": "中英表达",
+      "definition": "translationese, literal calques, redundant nominalisation, connector overuse, subject/theme rearrangement",
+      "example": "make a discussion -> discuss"
+    }
+  ]
+}

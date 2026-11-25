@@ -1,0 +1,2 @@
+https://github.com/66Union/ai-for-science-buct/tree/main/skills/writing-08-intro-related-work
+SKILL.md

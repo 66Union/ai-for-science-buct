@@ -1,0 +1,36 @@
+{
+  "version": "1.0.0",
+  "description": "Deterministic query templates the finalize phase appends when the agent declared fewer than three executable queries. {entity}, {relation}, {node_type} and {ref_label} are filled from the graph.",
+  "templates": [
+    {
+      "op": "neighbors",
+      "natural_language": "与「{entity}」直接相连的实体有哪些？它们的关系依据是什么？",
+      "priority": 1
+    },
+    {
+      "op": "relation",
+      "natural_language": "图谱中所有「{relation}」关系分别有哪些，证据在哪里？",
+      "priority": 2
+    },
+    {
+      "op": "cross_doc_shared",
+      "natural_language": "两篇材料共同出现的{node_type}有哪些？",
+      "priority": 3
+    },
+    {
+      "op": "evidence_lookup",
+      "natural_language": "「{ref_label}」的证据在原文哪个段落、原句是什么？",
+      "priority": 4
+    },
+    {
+      "op": "cross_doc_consistency",
+      "natural_language": "两篇论文是否使用了相同的物理样品、数据集或实验条件？",
+      "priority": 5
+    },
+    {
+      "op": "unresolved",
+      "natural_language": "哪些关系或合并存在冲突、证据不足，无法确定？",
+      "priority": 6
+    }
+  ]
+}

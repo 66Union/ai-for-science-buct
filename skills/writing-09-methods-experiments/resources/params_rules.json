@@ -1,0 +1,306 @@
+{
+  "_doc": "Extraction vocabulary for writing-09-methods-experiments. Edit this file to extend the parameter aliases, file suffixes or phrase lists; scripts/run_methods.py merges it over its built-in defaults and reports which file it used in run_report.json.",
+  "version": "1.0",
+  "config_suffixes": [
+    ".yaml",
+    ".yml",
+    ".json",
+    ".ini",
+    ".toml",
+    ".cfg",
+    ".conf",
+    ".env"
+  ],
+  "log_suffixes": [
+    ".log",
+    ".out",
+    ".err",
+    ".stdout",
+    ".stderr"
+  ],
+  "code_suffixes": [
+    ".py",
+    ".sh",
+    ".m",
+    ".r",
+    ".jl",
+    ".c",
+    ".cc",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".java",
+    ".js",
+    ".ts",
+    ".go"
+  ],
+  "doc_suffixes": [
+    ".md",
+    ".txt",
+    ".tex",
+    ".rst",
+    ".bib",
+    ".csv",
+    ".tsv",
+    ".html",
+    ".pdf",
+    ".docx",
+    ".pptx",
+    ".xml"
+  ],
+  "readme_names": [
+    "readme.md",
+    "readme.txt",
+    "readme",
+    "requirements.txt",
+    "environment.yml",
+    "environment.yaml",
+    "setup.py",
+    "setup.cfg",
+    "pyproject.toml",
+    "makefile"
+  ],
+  "draft_name_hints": [
+    "method",
+    "methods",
+    "experiment",
+    "experiments",
+    "draft",
+    "section",
+    "chapter",
+    "manuscript",
+    "paper",
+    "writeup",
+    "write-up",
+    "document",
+    "稿",
+    "正文",
+    "方法",
+    "实验"
+  ],
+  "name_groups": {
+    "learning_rate": [
+      "lr",
+      "learning-rate",
+      "learningrate",
+      "base_lr",
+      "init_lr",
+      "learning rate"
+    ],
+    "batch_size": [
+      "bs",
+      "batchsize",
+      "batch",
+      "train_batch_size",
+      "batch size"
+    ],
+    "epochs": [
+      "epoch",
+      "num_epochs",
+      "n_epochs",
+      "max_epochs",
+      "max_epoch",
+      "num epoch",
+      "training epochs"
+    ],
+    "seed": [
+      "random_seed",
+      "seeds",
+      "manual_seed",
+      "torch_seed",
+      "random seed"
+    ],
+    "weight_decay": [
+      "wd",
+      "weight-decay",
+      "weight decay",
+      "l2_penalty"
+    ],
+    "num_layers": [
+      "n_layers",
+      "layers",
+      "depth",
+      "num layer"
+    ],
+    "hidden_size": [
+      "hidden_dim",
+      "d_model",
+      "dim",
+      "embedding_dim",
+      "hidden size"
+    ],
+    "dropout": [
+      "dropout_rate",
+      "p_drop",
+      "dropout rate"
+    ],
+    "warmup_steps": [
+      "warmup",
+      "warmup step"
+    ],
+    "gradient_clip": [
+      "clip_grad",
+      "grad_clip",
+      "max_grad_norm",
+      "gradient clip"
+    ],
+    "optimizer": [
+      "optim",
+      "optimiser"
+    ],
+    "scheduler": [
+      "lr_scheduler",
+      "learning_rate_schedule",
+      "schedule"
+    ],
+    "momentum": [
+      "beta1",
+      "beta_1"
+    ],
+    "repeats": [
+      "n_runs",
+      "num_runs",
+      "runs",
+      "repeat",
+      "replicates",
+      "repetitions",
+      "repeated",
+      "times"
+    ],
+    "num_workers": [
+      "workers",
+      "dataloader_workers"
+    ],
+    "temperature": [
+      "temp",
+      "tau"
+    ],
+    "top_k": [
+      "topk",
+      "top-k"
+    ],
+    "top_p": [
+      "topp",
+      "top-p"
+    ],
+    "train_ratio": [
+      "train_split",
+      "train_fraction"
+    ],
+    "val_ratio": [
+      "val_split",
+      "validation_split",
+      "val_fraction"
+    ],
+    "test_ratio": [
+      "test_split",
+      "test_fraction"
+    ],
+    "learning_rate_decay": [
+      "lr_decay",
+      "lr decay"
+    ],
+    "num_gpus": [
+      "gpus",
+      "n_gpu",
+      "num gpu"
+    ]
+  },
+  "param_name_tokens": [
+    "learning rate",
+    "lr",
+    "batch size",
+    "epochs",
+    "seed",
+    "weight decay",
+    "dropout",
+    "momentum",
+    "temperature",
+    "top-k",
+    "top_k",
+    "hidden size",
+    "layers",
+    "warmup",
+    "gradient clip",
+    "num workers",
+    "repeats",
+    "runs"
+  ],
+  "metric_names": [
+    "accuracy",
+    "acc",
+    "top-1",
+    "top-5",
+    "f1",
+    "auc",
+    "precision",
+    "recall",
+    "loss",
+    "psnr",
+    "ssim",
+    "bleu",
+    "rouge",
+    "mse",
+    "mae",
+    "rmse",
+    "map",
+    "iou"
+  ],
+  "hardware_tokens": [
+    "gpu",
+    "cuda",
+    "nvidia",
+    "rtx",
+    "a100",
+    "h100",
+    "v100",
+    "tpu",
+    "cpu",
+    "amd",
+    "mps"
+  ],
+  "limitation_markers": [
+    "limitation",
+    "limited",
+    "caveat",
+    "only",
+    "cannot",
+    "not support",
+    "fail",
+    "restrict",
+    "局限",
+    "限制",
+    "仅适用",
+    "不适用",
+    "无法"
+  ],
+  "generic_limitation_phrases": [
+    "存在局限性",
+    "有一定的局限性",
+    "需要进一步研究",
+    "需要更多研究",
+    "有待进一步",
+    "无法评估",
+    "in general",
+    "further research",
+    "limited by the data",
+    "受限于数据",
+    "整体上",
+    "as is well known"
+  ],
+  "command_prefixes": [
+    "python",
+    "python3",
+    "bash",
+    "sh",
+    "torchrun",
+    "accelerate",
+    "deepspeed",
+    "conda",
+    "pip",
+    "make",
+    "npm",
+    "Rscript",
+    "julia"
+  ]
+}

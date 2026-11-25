@@ -245,3 +245,25 @@ node "D:\AI-for-science\tools\dsh2trace.mjs" --session session-0945b7b3-f4d2-48d
 - 有隐藏 verifier 且会产出 reward → 排行榜分数 = reward×100 的推断成立；人工评审（9 题）另行打分。
 - 下载接口只能拿 `challenge.json`/`config.json`/`task.md`，**拿不到 `environment/` 与隐藏测试**；`interface-example` 资源同理不可下载。契约字段名只能靠反射，不能提前知道 —— 这再次确认“禁止硬编码 schema”是唯一正确解。
 
+---
+
+## 13. 评分巡检与自动迭代（2026-11-25 20:59 起）
+
+**定时任务** `schedule-b745adb0-1bc0-4336-bc12-5eb2279c02fa`：每 30 分钟在**本会话**跑一次巡检，
+rrule `DTSTART;TZID=Asia/Shanghai:20261125T211000 / FREQ=MINUTELY;INTERVAL=30;UNTIL=20261129T160000Z`（到 11-29 24:00 北京时间）。
+
+巡检只做一件事：`python tools/check_scores.py` —— 它对比 `out/score-snapshot.json`，
+输出 `changed` / `new_scores` / `evaluation_errors` / `stage_changes` / `queue_min`。
+无变化时只回一行，不烧 token；一旦出分，按任务提示词进入「诊断 → 一个具体改进 → 三道门 → 提交」循环。
+
+`out/attempts.json`：14 个 attempt 与题目/目录的对应表（巡检和迭代都靠它）。
+`out/iteration-log.md`：出分后的「分数 → 诊断 → 改动 → 新 attempt」记录。
+
+手动巡检（不用等定时任务）：
+
+```powershell
+$py = "C:\Users\86188\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\python.exe"
+& $py "D:\AI-for-science\tools\check_scores.py" --raw
+```
+
+手动跑一次巡检任务：`playground schedule` 不暴露命令，直接在会话里跑上面的脚本即可。

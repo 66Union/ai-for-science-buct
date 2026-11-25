@@ -28,14 +28,23 @@ REPO = Path(__file__).resolve().parents[1]
 SKILLS = REPO / "skills"
 # The public repos the skills state in GITHUB_URL.txt; keep the path form in sync.
 DEFAULT_REPO = "66Union/ai-for-science-buct"
-UA = "Mozilla/5.0 (compatible; skill-publish-check/1.0)"
+# GitHub serves a small interstitial to obviously non-browser agents and the file
+# listing only appears deep in the real HTML, so use a browser-like UA and read the
+# whole document instead of a 4 KB prefix.
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
+MAX_BODY = 600 * 1024
 
 
 def fetch(url: str, timeout: int = 30) -> tuple[int, str]:
-    request = urllib.request.Request(url, headers={"User-Agent": UA})
+    request = urllib.request.Request(url, headers={
+        "User-Agent": UA,
+        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    })
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.status, response.read(4000).decode("utf-8", "replace")
+            return response.status, response.read(MAX_BODY).decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         return exc.code, ""
     except Exception as exc:  # noqa: BLE001 - network probe must not crash
@@ -52,7 +61,7 @@ def check_skill(skill_dir: Path, repo: str, branch: str) -> dict:
     tree_url = f"https://github.com/{repo}/tree/{branch}/{rel}?cb={stamp}"
     status, body = fetch(tree_url)
     checks.append({"url": tree_url, "status": status,
-                   "expect": "200 and the directory name in the HTML",
+                   "expect": "200 and the directory name in the HTML title",
                    "ok": status == 200 and skill_dir.name in body})
 
     # 2) raw SKILL.md at it is packaged (proof the file, not a cached page)

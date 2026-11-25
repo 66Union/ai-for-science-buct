@@ -134,22 +134,70 @@ def make_docx(path: Path) -> None:
         archive.writestr("word/document.xml", DOCX_XML)
 
 
-def build_input(root: Path, variant: str, *, contract: bool = True,
-                material: bool = True) -> Path:
-    """Create an /input-like sandbox for one variant."""
+CONTRACT_LIST = ["parsed_pages", "full_text", "section_outline"]
+CONTRACT_NESTED = {"task": {"case_id": "e2e-case-gamma",
+                            "output_contract": {
+                                "document_structure": {"type": "object"},
+                                "evidence_bundle": {"type": "array"},
+                                "run_status": {"type": "string"},
+                            }}}
+CONTRACT_CORRUPT = "{ this is not valid json, a real case.json never is, but robustness matters"
+
+
+def contract_payload(shape: str | None) -> str:
+    """Serialise the requested case.json shape."""
+    if shape == "dict":
+        return json.dumps(CONTRACT_A, ensure_ascii=False, indent=2)
+    if shape == "list":
+        return json.dumps({"case_id": "e2e-case-alpha", "output_contract": CONTRACT_LIST},
+                          ensure_ascii=False, indent=2)
+    if shape == "nested":
+        return json.dumps(CONTRACT_NESTED, ensure_ascii=False, indent=2)
+    if shape == "corrupt":
+        return CONTRACT_CORRUPT
+    return json.dumps({"case_id": "e2e-case-beta", "task": "no contract declared"}, indent=2)
+
+
+def expected_fields(shape: str | None) -> list[str]:
+    if shape == "dict":
+        return list(CONTRACT_A["output_contract"])
+    if shape == "list":
+        return list(CONTRACT_LIST)
+    if shape == "nested":
+        return list(CONTRACT_NESTED["task"]["output_contract"])
+    return []
+
+
+def build_input(root: Path, variant: str, *, contract: str | None = "dict",
+                material: str | None = "flat") -> Path:
+    """Create an /input-like sandbox for one variant.
+
+    contract: "dict" | "list" | "nested" | "corrupt" | None
+    material: "flat" (environment/*) | "canonical" (environment/reference/paper.pdf +
+              instruction.md) | None
+    """
     inbox = root / variant
     shutil.rmtree(inbox, ignore_errors=True)
     inbox.mkdir(parents=True, exist_ok=True)
     (inbox / "environment").mkdir(exist_ok=True)
+    (inbox / "case.json").write_text(contract_payload(contract), encoding="utf-8")
 
-    if contract:
-        (inbox / "case.json").write_text(json.dumps(CONTRACT_A, ensure_ascii=False, indent=2),
-                                         encoding="utf-8")
-    else:
-        (inbox / "case.json").write_text(json.dumps(
-            {"case_id": "e2e-case-beta", "task": "no contract declared"}, indent=2), encoding="utf-8")
+    if material == "canonical":
+        reference = inbox / "environment" / "reference"
+        reference.mkdir(exist_ok=True)
+        try:
+            make_pdf(reference / "paper.pdf")
+        except Exception as exc:
+            print(f"  warn: could not build the synthetic PDF: {exc}")
+        (inbox / "environment" / "resources.yaml").write_text(
+            "resources:\n  - name: paper\n    path: reference/paper.pdf\n"
+            "    description: the paper to read\n", encoding="utf-8")
+        (inbox / "instruction.md").write_text(
+            "# Task\n\nRead environment/reference/paper.pdf and produce the structured "
+            "result required by case.json.output_contract.\n", encoding="utf-8")
+        return inbox
 
-    if material:
+    if material == "flat":
         try:
             make_pdf(inbox / "environment" / "paper.pdf")
         except Exception as exc:  # pragma: no cover - fixture import must work
@@ -210,7 +258,8 @@ def run_script(package: Path, script: Path, inbox: Path, mode: str, timeout: int
         return {"argv": argv, "returncode": None, "error": f"timeout {timeout}s"}
 
 
-def check_result(inbox: Path, case: dict, *, require_evidence: bool) -> list[str]:
+def check_result(inbox: Path, expected: list[str], case_id: str | None,
+                 *, require_evidence: bool) -> list[str]:
     problems: list[str] = []
     result_path = inbox / "output" / "result.json"
     if not result_path.is_file():
@@ -222,11 +271,9 @@ def check_result(inbox: Path, case: dict, *, require_evidence: bool) -> list[str
     if not isinstance(data, dict):
         return ["result.json is not a JSON object"]
 
-    declared = case.get("output_contract") or {}
-    case_id = case.get("case_id")
     if case_id and data.get("case_id") != case_id:
         problems.append(f"case_id mismatch: {data.get('case_id')!r} != {case_id!r}")
-    for field in declared:
+    for field in expected:
         if field not in data:
             problems.append(f"declared contract field missing from result.json: {field}")
     meta = data.get("meta")
@@ -266,21 +313,34 @@ def main() -> int:
     modes = supported_modes(package, script)
     print(f"modes   : {sorted(modes) or ['default (single-phase runner)']}")
     primary = "all" if "--all" in modes else "default"
-    # variant -> (mode, contract_present, material_present, case, require_evidence)
+    # variant -> (mode, contract shape, material shape, expected contract fields,
+    #             expected case_id, require evidence/run-report)
     variants = [
-        ("full", primary, True, True, CONTRACT_A, True),
-        ("no_contract", primary, False, True,
-         {"case_id": "e2e-case-beta"}, False),
-        ("no_material", primary, True, False, CONTRACT_A, False),
+        ("full", primary, "dict", "flat",
+         expected_fields("dict"), CONTRACT_A["case_id"], True),
+        # a contract written as a list of names, and one nested under task.* - both
+        # are shapes the reflection layer must tolerate on a hidden case
+        ("contract_list", primary, "list", "flat",
+         expected_fields("list"), "e2e-case-alpha", False),
+        # the documented canonical layout: environment/reference/paper.pdf + instruction.md
+        ("canonical_layout", primary, "dict", "canonical",
+         expected_fields("dict"), CONTRACT_A["case_id"], True),
+        ("no_contract", primary, None, "flat", [], "e2e-case-beta", False),
+        # a malformed case.json must not take the run down: a result file is still
+        # required, it just cannot promise contract fields
+        ("corrupt_case", primary, "corrupt", "flat", [], None, False),
+        ("no_material", primary, "dict", None,
+         expected_fields("dict"), CONTRACT_A["case_id"], False),
     ]
     if "--finalize" in modes:
         # the degradation path: finalize with no agent-generated batches at all
-        variants.insert(1, ("full_finalize_only", "finalize", True, True, CONTRACT_A, True))
+        variants.insert(1, ("full_finalize_only", "finalize", "dict", "flat",
+                            expected_fields("dict"), CONTRACT_A["case_id"], True))
 
     root = WORK / package.name
     failures: list[str] = []
-    for variant, mode, has_contract, has_material, case, require_evidence in variants:
-        inbox = build_input(root, variant, contract=has_contract, material=has_material)
+    for variant, mode, contract_shape, material_shape, expected, case_id, require_evidence in variants:
+        inbox = build_input(root, variant, contract=contract_shape, material=material_shape)
         print(f"\n[{variant}] mode=--{mode} cwd={inbox}")
         outcome = run_script(package, script, inbox, mode, ns.timeout)
         rc = outcome.get("returncode")
@@ -289,7 +349,7 @@ def main() -> int:
             failures.append(f"{variant}: runner exited {rc}")
             tail = (outcome.get("stderr") or outcome.get("stdout") or "")[-800:]
             print("  tail:", tail.replace("\n", "\n  "))
-        problems = check_result(inbox, case, require_evidence=require_evidence)
+        problems = check_result(inbox, expected, case_id, require_evidence=require_evidence)
         for problem in problems:
             print("  PROBLEM:", problem)
             failures.append(f"{variant}: {problem}")

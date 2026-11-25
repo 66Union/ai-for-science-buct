@@ -36,7 +36,10 @@ def load_case(case_path: str | Path | None) -> dict[str, Any]:
     if not p.is_file():
         return {}
     try:
-        data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+        # utf-8-sig: tolerate a BOM. A tool that writes JSON from PowerShell on
+        # Windows emits UTF-8 with BOM by default, and plain json.loads fails on it
+        # - which silently looked like "this case declared no contract".
+        data = json.loads(p.read_text(encoding="utf-8-sig", errors="replace"))
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
@@ -103,6 +106,26 @@ def find_case_id(case: dict[str, Any], fallback: str | None = None) -> str | Non
     return fallback
 
 
+def _placeholder_for(spec: Any) -> Any:
+    """Shape a missing value by its declared type.
+
+    ``null`` is not always the kindest answer: a grader that does
+    ``len(result["sections"])`` raises on null, while ``[]`` keeps the declared
+    shape and still reads as "declared but empty". The value is always listed in
+    ``contract_fields_not_reported`` so nothing is silently faked.
+    """
+    if not isinstance(spec, dict):
+        return None
+    declared = str(spec.get("type") or "").casefold()
+    if declared in {"array", "list"}:
+        return []
+    if declared in {"object", "dict", "map", "mapping"}:
+        return {}
+    if declared in {"string", "str", "text"}:
+        return ""
+    return None
+
+
 def build_result(
     *,
     case: dict[str, Any],
@@ -123,13 +146,20 @@ def build_result(
     result: dict[str, Any] = {"case_id": case_id or ""}
 
     not_reported: list[str] = []
+    placeholders: dict[str, Any] = {}
     # 1) every declared field, in declared order
     for field in contract:
         name = field["name"]
+        # a contract that declares case_id must receive the real one, never a
+        # placeholder for a field we already know
+        if name.strip().casefold().replace("_", "") in {"caseid", "id"}:
+            result[name] = result["case_id"]
+            continue
         if name in values and values[name] is not None:
             result[name] = values[name]
         else:
-            result[name] = None
+            result[name] = _placeholder_for(field["spec"])
+            placeholders[name] = result[name]
             not_reported.append(name)
 
     # 2) values we produced that the contract did not name — keep them, but under
@@ -141,6 +171,7 @@ def build_result(
         "contract_detected": bool(contract),
         "contract_field_count": len(contract),
         "contract_fields_not_reported": not_reported,
+        "placeholders": placeholders,
         "limits": limits or [],
         "uncertainty": uncertainty or [],
         "change_log": change_log or [],

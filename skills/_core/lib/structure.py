@@ -85,6 +85,13 @@ NUMERIC_ROW = re.compile(r"(?:^|\s)[-+]?\d+(?:\.\d+)?(?:\s|$)")
 
 
 def detect_tables(doc: dict[str, Any]) -> list[dict[str, Any]]:
+    """Find candidate tables from layout, not from whitespace.
+
+    The old test looked for runs of three spaces inside block text - dead code,
+    because the block builder collapses whitespace before storing it, so the only
+    tables it ever reported were blocks with several numbers. Column starts come
+    from the span geometry instead, which is what actually indicates a table.
+    """
     candidates: list[dict[str, Any]] = []
     for page_key in sorted((doc.get("blocks") or {}), key=lambda k: int(k)):
         page = int(page_key)
@@ -92,19 +99,22 @@ def detect_tables(doc: dict[str, Any]) -> list[dict[str, Any]]:
             text = block.get("text") or ""
             if len(text) < 20:
                 continue
-            columns = len(TABLE_HINT.findall(text))
+            col_gaps = int(block.get("col_gaps") or 0)
             numbers = len(NUMERIC_ROW.findall(text))
-            if columns >= 2 or (numbers >= 3 and len(text) < 400):
-                confidence = min(0.9, 0.3 + 0.15 * columns + 0.05 * numbers)
+            lines = int(block.get("lines") or 1)
+            # a table needs either several aligned columns across several lines,
+            # or a dense numeric block
+            if (col_gaps >= 2 and lines >= 2) or (numbers >= 4 and lines >= 2):
+                confidence = min(0.9, 0.25 + 0.12 * col_gaps + 0.04 * numbers)
                 candidates.append({
                     "table_id": f"tbl-{page}-{len(candidates) + 1}",
                     "page": page,
                     "block_id": block.get("block_id"),
                     "bbox": block.get("bbox"),
                     "confidence": round(confidence, 2),
-                    "why": f"{columns} aligned column gaps, {numbers} numeric tokens",
+                    "why": f"{col_gaps} column gaps, {numbers} numeric tokens, {lines} lines",
                     "text_preview": text[:300],
-                    "note": "candidate from text layout only; cell boundaries not verified",
+                    "note": "candidate from span geometry only; cell boundaries not verified",
                 })
     return candidates
 
@@ -202,6 +212,75 @@ def infer_reading_order(doc: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Za-z0-9]+\b")
+KEYWORDS_RE = re.compile(r"(?:key\s*words?|index\s*terms|关键词)\s*[:：]\s*(.+)", re.I)
+
+
+def detect_frontmatter(doc: dict[str, Any]) -> dict[str, Any]:
+    """Title, authors, abstract, keywords, DOI.
+
+    These are named explicitly in the topic rubric, and the contract often asks for
+    them, yet the pipeline produced nothing for them - every such field came out
+    null. Everything here is heuristic and reports its confidence.
+    """
+    page1 = list((doc.get("blocks") or {}).get("1", []))
+    title = None
+    authors: list[str] = []
+    if page1:
+        biggest = max(page1, key=lambda b: b.get("size") or 0)
+        if (biggest.get("size") or 0) >= 11 and len(biggest.get("text") or "") <= 300:
+            title = biggest.get("text")
+            index = page1.index(biggest)
+            for block in page1[index + 1:index + 4]:
+                text = block.get("text") or ""
+                low = text.casefold().strip(" .:：")
+                if low in KNOWN_HEADINGS:
+                    break
+                if len(text) > 220:
+                    break
+                if any(marker in text for marker in (",", " and ", "大学", "Institute",
+                                                     "University", "Department", "Laboratory")):
+                    authors.append(text)
+
+    ordered: list[tuple[int, dict[str, Any]]] = []
+    for page_key in sorted((doc.get("blocks") or {}), key=lambda k: int(k)):
+        for block in doc["blocks"][page_key]:
+            ordered.append((int(page_key), block))
+
+    abstract_parts: list[str] = []
+    in_abstract = False
+    for _page, block in ordered:
+        text = (block.get("text") or "").strip()
+        low = text.casefold().strip(" .:：")
+        if low in {"abstract", "摘要"} and len(text) < 40:
+            in_abstract = True
+            continue
+        if not in_abstract:
+            continue
+        if block.get("likely_heading") or (low in KNOWN_HEADINGS and len(text) < 80):
+            break
+        abstract_parts.append(text)
+        if sum(len(p) for p in abstract_parts) > 2000:
+            break
+
+    full_text = " ".join(b.get("text") or "" for _p, b in ordered)
+    doi_match = DOI_RE.search(full_text)
+    keywords: list[str] = []
+    kw_match = KEYWORDS_RE.search(full_text)
+    if kw_match:
+        keywords = [k.strip() for k in re.split(r"[;,，；]", kw_match.group(1)) if k.strip()][:15]
+
+    return {
+        "title": title,
+        "authors": authors,
+        "abstract": (" ".join(abstract_parts)[:2000] or None),
+        "keywords": keywords,
+        "doi": doi_match.group(0) if doi_match else None,
+        "confidence": 0.6 if title else 0.0,
+        "why": "title = largest type on page 1; abstract = text after the Abstract heading",
+    }
+
+
 def outline(doc: dict[str, Any]) -> dict[str, Any]:
     return {
         "sections": detect_sections(doc),
@@ -209,4 +288,5 @@ def outline(doc: dict[str, Any]) -> dict[str, Any]:
         "formulas": detect_formulas(doc),
         "references": detect_references(doc),
         "reading_order": infer_reading_order(doc),
+        "frontmatter": detect_frontmatter(doc),
     }

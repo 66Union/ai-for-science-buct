@@ -112,7 +112,11 @@ def test_contract(tmp: Path) -> None:
     )
     check("case_id preserved", payload["case_id"] == "case-042", payload.get("case_id", ""))
     check("declared field carried", payload["parsed_pages"] == [{"page": 1}])
-    check("undeclared field left None (not invented)", payload["table_index"] is None)
+    check("missing array field keeps its declared shape", payload["table_index"] == [],
+          repr(payload.get("table_index")))
+    check("placeholder recorded as such",
+          payload["meta"]["placeholders"].get("table_index") == [],
+          str(payload["meta"].get("placeholders")))
     check("missing field recorded",
           payload["meta"]["contract_fields_not_reported"] == ["table_index"],
           str(payload["meta"]["contract_fields_not_reported"]))

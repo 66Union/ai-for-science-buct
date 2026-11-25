@@ -49,6 +49,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import zlib from "node:zlib";
+import { fileURLToPath } from "node:url";
 
 const ZSTD_MAGIC = 0xfd2fb528;
 
@@ -173,15 +174,28 @@ const redactionCounts = { phone: 0, email: 0, secret: 0 };
  * exact match. Only values of length >= 6 are used, to avoid shredding ordinary
  * words.
  */
-const VAULT_DIR = "D:/AI-for-science/.secrets";
+const VAULT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", ".secrets");
+const MIN_SECRET_LEN = 16;
+// A file whose name declares it a credential is always treated as one, whatever
+// its length: a short password must still be masked. The length/character guard
+// exists only to stop *incidental* vault entries from shredding ordinary prose.
+const DECLARED_SECRET_FILE = /password|passwd|secret|token|pat\b|api[_-]?key|credential/i;
+
 function loadVault() {
   const values = [];
+  let declared = 0;
   try {
     for (const name of fs.readdirSync(VAULT_DIR)) {
       if (!/\.txt$/i.test(name) || name.startsWith("_")) continue;
       try {
         const v = fs.readFileSync(path.join(VAULT_DIR, name), "utf8").trim();
-        if (v.length >= 6) values.push(v);
+        if (!v) continue;
+        const named = DECLARED_SECRET_FILE.test(name);
+        const plausible = v.length >= MIN_SECRET_LEN && /[^A-Za-z]/.test(v);
+        if (named || plausible) {
+          values.push(v);
+          if (named) declared += 1;
+        }
       } catch {
         /* unreadable single file must not stop the conversion */
       }
@@ -189,9 +203,11 @@ function loadVault() {
   } catch {
     /* no vault: PII regexes still apply */
   }
+  vaultStats.declared = declared;
   // longest first so a token containing another secret is not partially masked
   return values.sort((a, b) => b.length - a.length);
 }
+const vaultStats = { declared: 0 };
 const VAULT = loadVault();
 
 function redactPii(text) {
@@ -380,6 +396,14 @@ function main() {
   const model = String(arg(argv, "model", "deepseek-flash"));
   const { steps, notes } = convert(rows, { model });
 
+  // A redaction count this high means the vault holds something that is not a
+  // credential and the trace has been shredded. Refuse rather than upload it.
+  if (redactionCounts.secret > 200) {
+    console.error(`dsh2trace: ${redactionCounts.secret} secret redactions is implausible; `
+      + `check ${VAULT_DIR} for non-credential entries. Refusing to write ${out}.`);
+    process.exit(3);
+  }
+
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, steps.map((s) => JSON.stringify(s)).join("\n") + "\n", "utf8");
 
@@ -407,6 +431,7 @@ function main() {
     unpaired_tool_calls_dropped: notes.unpaired,
     error_results: notes.errorResults,
     pii_redactions: redactionCounts,
+    vault_declared_files: vaultStats.declared,
   }, null, 2));
 }
 

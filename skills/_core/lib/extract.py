@@ -24,6 +24,7 @@ import json
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -84,6 +85,9 @@ def _via_pymupdf(path: Path) -> dict[str, Any] | None:
     pages = []
     for index, page in enumerate(doc, start=1):
         spans = []
+        # PyMuPDF reports y downward (origin top-left); flip to PDF convention so
+        # every engine hands the rest of the pipeline one consistent axis.
+        page_height = float(page.rect.height)
         for block in page.get_text("dict").get("blocks", []):
             for line in block.get("lines", []):
                 for span in line.get("spans", []):
@@ -91,9 +95,12 @@ def _via_pymupdf(path: Path) -> dict[str, Any] | None:
                     if not text.strip():
                         continue
                     x0, y0, x1, y1 = span.get("bbox", [0, 0, 0, 0])
-                    spans.append(pdftext.Span(text=text, x0=x0, y0=y0, x1=x1, y1=y1,
-                                              size=span.get("size", 0.0),
-                                              font=span.get("font", "")))
+                    spans.append(pdftext.Span(
+                        text=text, x0=float(x0),
+                        y0=page_height - float(y1), x1=float(x1),
+                        y1=page_height - float(y0),
+                        size=span.get("size", 0.0),
+                        font=span.get("font", "")))
         spans.sort(key=lambda s: (-round(s.y1, 1), s.x0))
         pages.append(pdftext.Page(number=index, width=page.rect.width,
                                   height=page.rect.height, spans=spans))
@@ -118,16 +125,22 @@ def _via_pdfplumber(path: Path) -> dict[str, Any] | None:
     with pdfplumber.open(str(path)) as pdf:
         for index, page in enumerate(pdf.pages, start=1):
             spans = []
+            # pdfplumber's top/bottom are y-down; flip to the PDF convention.
+            page_height = float(page.height or 0)
             for word in page.extract_words() or []:
+                top = float(word.get("top", 0.0))
+                bottom = float(word.get("bottom", 0.0))
                 spans.append(pdftext.Span(
                     text=word.get("text", ""),
-                    x0=word.get("x0", 0.0), y0=word.get("top", 0.0),
-                    x1=word.get("x1", 0.0), y1=word.get("bottom", 0.0),
-                    size=(word.get("bottom", 0) - word.get("top", 0)) or 0.0,
+                    x0=float(word.get("x0", 0.0)),
+                    y0=page_height - bottom,
+                    x1=float(word.get("x1", 0.0)),
+                    y1=page_height - top,
+                    size=(bottom - top) or 0.0,
                 ))
-            spans.sort(key=lambda s: (round(s.y0, 1), s.x0))
+            spans.sort(key=lambda s: (-round(s.y1, 1), s.x0))
             pages.append(pdftext.Page(number=index, width=float(page.width or 0),
-                                      height=float(page.height or 0), spans=spans))
+                                      height=page_height, spans=spans))
     total = sum(len(p.text) for p in pages)
     return {
         "engine": "pdfplumber",
@@ -186,13 +199,24 @@ def _via_builtin(path: Path) -> dict[str, Any]:
 
 # ------------------------------------------------------------------- API ----
 
-def extract_document(path: str | Path, prefer: str | None = None) -> dict[str, Any]:
-    """Extract one document, trying engines in fidelity order."""
+def extract_document(path: str | Path, prefer: str | None = None,
+                     deadline: float | None = None) -> dict[str, Any]:
+    """Extract one document, trying engines in fidelity order.
+
+    ``deadline`` is an absolute ``time.time()`` value. Every engine is checked
+    against it before starting, because the evaluation container kills the run at
+    900 s: a hung external tool must cost us one engine, never the whole result.
+
+    All returned pages are normalised to **PDF convention: origin bottom-left,
+    y increasing upward.** PyMuPDF and pdfplumber report y downward, so their
+    boxes are flipped here; a caller may therefore assume one coordinate system
+    regardless of which engine answered.
+    """
     p = Path(path)
     if not p.is_file():
         return {"engine": None, "path": str(p), "pages": [], "text_layer": False,
                 "total_chars": 0, "warnings": [f"file not found: {p}"],
-                "anchor_quality": "text"}
+                "anchor_quality": "text", "attempts": ["file not found"], "blocks": {}}
 
     suffix = p.suffix.lower()
     if suffix != ".pdf":
@@ -203,34 +227,122 @@ def extract_document(path: str | Path, prefer: str | None = None) -> dict[str, A
     if prefer:
         order = [prefer] + [o for o in order if o != prefer]
 
+    builtin_doc: dict[str, Any] | None = None
+
     for engine in order:
+        if deadline is not None and time.time() > deadline - 5:
+            attempts.append(f"{engine}: skipped (deadline)")
+            continue
         try:
             if engine == "pymupdf":
                 doc = _via_pymupdf(p)
+                if doc is None:
+                    attempts.append("pymupdf: not installed")
+                    continue
             elif engine == "pdfplumber":
                 doc = _via_pdfplumber(p)
+                if doc is None:
+                    attempts.append("pdfplumber: not installed")
+                    continue
             elif engine == "builtin":
-                doc = _via_builtin(p)
+                doc = builtin_doc or _via_builtin(p)
+                builtin_doc = doc
             else:
                 template = dict(EXTERNAL_TEXT_TOOLS).get(engine)
-                doc = _via_external(p, engine, template) if template else None
+                if not template:
+                    attempts.append(f"{engine}: unknown template")
+                    continue
+                doc = _via_external(p, engine, template)
+                if doc is None:
+                    attempts.append(f"{engine}: not installed or failed")
+                    continue
+                doc = _normalise_external(doc, engine, attempts)
+                if doc is None:
+                    continue
         except Exception as exc:
-            attempts.append(f"{engine}: {exc}")
+            attempts.append(f"{engine}: exception {type(exc).__name__}: {exc}")
             continue
+
         if doc and doc.get("pages") and doc.get("text_layer"):
             doc["attempts"] = attempts
-            doc["blocks"] = {str(pg.number): pdftext.blocks(pg) for pg in doc["pages"]}
+            doc["blocks"] = _safe_blocks(doc, attempts)
             return doc
-        attempts.append(f"{engine}: no text")
+        attempts.append(f"{engine}: no text layer")
         if doc and not doc.get("text_layer"):
-            # keep the empty-but-structural result only if nothing better appears
-            last = doc
-    last_any = _via_builtin(p)
+            builtin_doc = doc
+
+    # nothing produced text: fall back to the structural (possibly empty) result
+    last_any = builtin_doc
+    if last_any is None:
+        try:
+            last_any = _via_builtin(p)
+        except Exception as exc:
+            last_any = {"engine": "builtin", "path": str(p), "pages": [],
+                        "text_layer": False, "total_chars": 0,
+                        "warnings": [f"builtin extraction failed: {type(exc).__name__}: {exc}"],
+                        "anchor_quality": "text"}
+    last_any = dict(last_any)
     last_any["attempts"] = attempts
-    last_any["warnings"] = last_any.get("warnings", []) + [
+    last_any["warnings"] = list(last_any.get("warnings") or []) + [
         "every engine returned an empty or text-free result"]
-    last_any["blocks"] = {str(pg.number): pdftext.blocks(pg) for pg in last_any["pages"]}
+    last_any["blocks"] = _safe_blocks(last_any, attempts)
     return last_any
+
+
+def _normalise_external(doc: dict[str, Any], engine: str,
+                        attempts: list[str]) -> dict[str, Any] | None:
+    """Accept an external tool's JSON only in a shape we can actually use.
+
+    A wrapper that answers ``{"pages": 3}`` or a list of dicts would otherwise
+    reach ``pdftext.blocks`` and raise ``AttributeError`` — which, before this
+    guard, killed the whole run and produced no result.json at all.
+    """
+    pages = doc.get("pages")
+    if isinstance(pages, int):
+        attempts.append(f"{engine}: json reported a page count, not page content")
+        return None
+    if not isinstance(pages, list):
+        attempts.append(f"{engine}: json has no usable 'pages'")
+        return None
+    converted: list[Any] = []
+    for index, item in enumerate(pages, start=1):
+        if isinstance(item, pdftext.Page):
+            converted.append(item)
+            continue
+        if not isinstance(item, dict):
+            attempts.append(f"{engine}: page {index} is {type(item).__name__}, not an object")
+            return None
+        text = item.get("text") or item.get("content") or ""
+        spans = []
+        for line_no, line in enumerate(str(text).splitlines()):
+            if line.strip():
+                spans.append(pdftext.Span(text=line, x0=0.0, y0=float(-line_no * 12),
+                                          x1=float(len(line)), y1=float(-line_no * 12 + 10),
+                                          size=10.0))
+        converted.append(pdftext.Page(number=index,
+                                      width=float(item.get("width") or 0),
+                                      height=float(item.get("height") or 0), spans=spans))
+    if not converted:
+        return None
+    doc = dict(doc)
+    doc["pages"] = converted
+    doc["total_chars"] = sum(len(pg.text) for pg in converted)
+    doc["text_layer"] = doc["total_chars"] > 20
+    doc.setdefault("warnings", []).append(
+        "external JSON normalised to page-level text; spans carry no true coordinates")
+    doc["anchor_quality"] = "page"
+    return doc
+
+
+def _safe_blocks(doc: dict[str, Any], attempts: list[str]) -> dict[str, list[dict[str, Any]]]:
+    blocks: dict[str, list[dict[str, Any]]] = {}
+    for pg in doc.get("pages") or []:
+        try:
+            blocks[str(pg.number)] = pdftext.blocks(pg)
+        except Exception as exc:
+            attempts.append(f"blocks failed on page {getattr(pg, 'number', '?')}: {type(exc).__name__}")
+            blocks[str(getattr(pg, "number", len(blocks) + 1))] = []
+    return blocks
 
 
 def _extract_plain(p: Path) -> dict[str, Any]:

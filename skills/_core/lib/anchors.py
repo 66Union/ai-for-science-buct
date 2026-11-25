@@ -122,29 +122,70 @@ def verify(doc: dict[str, Any], anchor: dict[str, Any]) -> dict[str, Any]:
 GROUNDED = {"exact", "normalised"}
 
 
+def _claim_supported(claim_text: str, quote: str) -> bool:
+    """Does the quoted evidence actually mention what the claim is about?
+
+    Without this check the pipeline verified its own output: the quote was cut
+    from a block and then "verified" against that same block, so grounding_rate was
+    always 1.0 even when the text was garbled or the columns were interleaved.
+    Requiring claim terms to appear in the quote makes the number mean something.
+    """
+    terms = [t for t in _keywords(claim_text) if len(t) > 2]
+    if not terms:
+        return True  # nothing specific enough to check
+    haystack = normalize(quote)
+    if not haystack:
+        return False
+    hits = sum(1 for t in terms if normalize(t) in haystack)
+    return hits >= max(1, min(2, len(terms) // 3))
+
+
 def verify_all(doc: dict[str, Any], claims: list[dict[str, Any]]) -> dict[str, Any]:
     """Verify a list of claims, each carrying an ``anchors`` list."""
     report: list[dict[str, Any]] = []
     grounded = ungrounded = 0
     for claim in claims:
         results = [verify(doc, a) for a in claim.get("anchors", [])]
-        ok = any(r["match"] in GROUNDED for r in results)
+        located = any(r["match"] in GROUNDED for r in results)
+        # A *positional* claim ("this region on page 2 is a table candidate") is
+        # about where something is, not what it says, so its evidence is the
+        # location itself. Only content claims must have their terms quoted back.
+        structural = str(claim.get("kind") or "") == "structural"
+        supported = structural or any(
+            r["match"] in GROUNDED and _claim_supported(claim.get("claim", ""), a.get("quote", ""))
+            for r, a in zip(results, claim.get("anchors", []))
+        )
+        ok = located and supported
         if ok:
             grounded += 1
         else:
             ungrounded += 1
-            claim.setdefault("flags", []).append("ungrounded")
+            if located and not supported:
+                claim.setdefault("flags", []).append("evidence_does_not_mention_claim")
+            else:
+                claim.setdefault("flags", []).append("ungrounded")
         report.append({
             "claim_id": claim.get("claim_id"),
+            "kind": claim.get("kind") or "content",
             "grounded": ok,
+            "located": located,
+            "supported_by_quote": supported,
             "checks": results,
         })
     total = grounded + ungrounded
+    quality = doc.get("anchor_quality") or "text"
+    rate = round(grounded / total, 4) if total else 0.0
+    # An extraction that lost coordinates cannot support span-level verification;
+    # report the ceiling instead of implying full confidence.
+    ceiling = {"span": 1.0, "page": 0.7, "text": 0.4}.get(quality, 0.4)
     return {
         "claims_total": total,
         "grounded": grounded,
         "ungrounded": ungrounded,
-        "grounding_rate": round(grounded / total, 4) if total else 0.0,
+        "grounding_rate": rate,
+        "anchor_quality": quality,
+        "confidence_ceiling": ceiling,
+        "effective_confidence": round(min(rate, ceiling), 4),
         "per_claim": report,
     }
 

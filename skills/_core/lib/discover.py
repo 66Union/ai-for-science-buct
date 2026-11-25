@@ -32,7 +32,9 @@ TEXT_SUFFIXES = {".md", ".txt", ".json", ".yaml", ".yml", ".csv", ".tsv"}
 DOC_SUFFIXES = {".pdf", ".xml", ".docx", ".pptx", ".tex", ".bib"}
 MATERIAL_SUFFIXES = TEXT_SUFFIXES | DOC_SUFFIXES
 
-# Never treat our own deliverables as input material.
+# Never treat our own deliverables as input material. Only VCS/cache noise is
+# excluded by directory name: materials sometimes ship inside results/ or output/.
+VCS_DIR_NAMES = {"__pycache__", ".git", "node_modules", ".pytest_cache"}
 EXCLUDE_DIR_NAMES = {"output", "outputs", "result", "results", "__pycache__", ".git", "node_modules"}
 
 
@@ -46,11 +48,16 @@ def _iter_roots(roots: Iterable[str]) -> list[Path]:
 
 
 def _walk_files(root: Path, max_files: int = 2000) -> list[Path]:
-    """Bounded walk, skipping output and VCS directories."""
+    """Bounded walk, skipping our own output and VCS directories.
+
+    ``os.walk`` yields entries in filesystem order, which differs between runs and
+    machines. The platform runs each case three times and compares the results, so
+    the order is sorted here to make discovery deterministic.
+    """
     out: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIR_NAMES]
-        for name in filenames:
+        dirnames[:] = sorted(d for d in dirnames if d not in EXCLUDE_DIR_NAMES)
+        for name in sorted(filenames):
             out.append(Path(dirpath) / name)
             if len(out) >= max_files:
                 return out
@@ -61,7 +68,7 @@ def _looks_like_case(path: Path) -> bool:
     if path.suffix.lower() != ".json":
         return False
     try:
-        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        data = json.loads(path.read_text(encoding="utf-8-sig", errors="replace"))
     except Exception:
         return False
     if not isinstance(data, dict):
@@ -112,7 +119,7 @@ def discover() -> dict[str, Any]:
         roots = [Path.cwd()]
 
     files: list[Path] = []
-    for root in roots[:3]:  # bound the scan; the first roots are the specific ones
+    for root in roots:  # every root counts: material often lives only in /app/environment
         files.extend(_walk_files(root))
     # de-duplicate while keeping order
     seen: set[str] = set()
@@ -126,20 +133,44 @@ def discover() -> dict[str, Any]:
     case_path = _locate_case(roots, uniq_files)
     task_md = _locate_task_md(roots, uniq_files)
 
+    # Materials = anything a reader could parse, including plain text. The earlier
+    # version only accepted binary document suffixes, so a Markdown or .txt case
+    # produced zero materials and the run reported "failed" with every contract
+    # field null - a silent zero on a case we claim to support.
+    skip_names = {"task.md", "instruction.md"}
     material_docs = [
         f for f in uniq_files
-        if f.suffix.lower() in DOC_SUFFIXES and f != case_path
-        and not any(part in EXCLUDE_DIR_NAMES for part in f.parts)
+        if f.suffix.lower() in MATERIAL_SUFFIXES
+        and f.suffix.lower() != ".json"          # case.json / our own json outputs
+        and f != case_path
+        and f != task_md
+        and f.name.lower() not in skip_names
+        and not any(part in VCS_DIR_NAMES for part in f.parts)
     ]
-    # Prefer the canonical paper location when present.
-    canonical_paper = [f for f in material_docs if f.name == "paper.pdf" or "reference" in f.parts]
-    ordered_docs = canonical_paper + [f for f in material_docs if f not in canonical_paper]
+    # Deterministic priority: canonical paper name, then reference/, then PDFs,
+    # then larger files. Without this, which document becomes "primary" depended
+    # on filesystem order and differed between repeats.
+    def _rank(f: Path) -> tuple:
+        return (
+            0 if f.name.lower() == "paper.pdf" else 1,
+            0 if "reference" in (p.lower() for p in f.parts) else 1,
+            0 if f.suffix.lower() == ".pdf" else 1,
+            -f.stat().st_size if f.exists() else 0,
+            str(f),
+        )
+
+    ordered_docs = sorted(material_docs, key=_rank)
 
     out_dir = None
+    # `mkdir(exist_ok=True)` on a read-only /app/output reports success and then
+    # every write fails. Probe with a real file so a bad candidate is skipped.
     for raw in OUTPUT_ROOTS:
         p = Path(raw)
         try:
             p.mkdir(parents=True, exist_ok=True)
+            probe = p / ".write_probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
             out_dir = p
             break
         except Exception:

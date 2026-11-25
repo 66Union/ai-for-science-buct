@@ -20,10 +20,12 @@ the 3-runs-per-case requirement reproducible.
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +65,12 @@ FAMILY_STEMS: dict[str, str] = {
     "answer": "answers",
     "qa": "answers",
     "question": "answers",
+    "title": "title",
+    "author": "authors",
+    "abstract": "abstract",
+    "keyword": "keywords",
+    "indexterm": "keywords",
+    "doi": "doi",
 }
 COLLECTION_SUFFIXES = ("_index", "_list", "_entries", "_items", "_results", "_data", "_content")
 
@@ -114,7 +122,7 @@ def _log(msg: str) -> None:
 
 
 def build_document_output(doc: dict[str, Any]) -> dict[str, Any]:
-    """Per-page, block-level output: the '提得全 / 排得对 / 拆得清 / 核得回' payload."""
+    """Per-page, block-level output: the '鎻愬緱鍏?/ 鎺掑緱瀵?/ 鎷嗗緱娓?/ 鏍稿緱鍥? payload."""
     pages = []
     for page in doc["pages"]:
         blocks = (doc.get("blocks") or {}).get(str(page.number), [])
@@ -171,6 +179,7 @@ def collect_claims(doc: dict[str, Any], struct: dict[str, Any],
         claims.append({
             "claim_id": f"claim-{table['table_id']}",
             "claim": f"candidate table region on page {page}",
+            "kind": "structural",
             "anchors": [anchors.make_anchor(page, block, anchors.pick_quote(block["text"], []))],
         })
 
@@ -183,18 +192,14 @@ def collect_claims(doc: dict[str, Any], struct: dict[str, Any],
         claims.append({
             "claim_id": f"claim-{formula['formula_id']}",
             "claim": f"candidate formula region on page {page}",
+            "kind": "structural",
             "anchors": [anchors.make_anchor(page, block, anchors.pick_quote(block["text"], []))],
         })
 
     return claims, anchors.verify_all(doc, claims)
 
 
-def run() -> int:
-    out_dir_override = None
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    if "--out" in sys.argv:
-        out_dir_override = sys.argv[sys.argv.index("--out") + 1]
-
+def _run_body(out_dir_override: str | None) -> int:
     _log("stage 1/6 discover")
     found = discover.discover()
     out_dir = Path(out_dir_override) if out_dir_override else Path(found["output_dir"])
@@ -227,9 +232,13 @@ def run() -> int:
         return 0
 
     _log("stage 3/6 extract")
+    deadline = START + SOFT_DEADLINE_S
     docs: list[dict[str, Any]] = []
     for path in found["material_docs"][:4]:
-        doc = extract.extract_document(path)
+        if time.time() > deadline - 5:
+            limits.append(f"extraction deadline reached before {Path(path).name}")
+            break
+        doc = extract.extract_document(path, deadline=deadline)
         _log(f"  {Path(path).name}: engine={doc.get('engine')} pages={len(doc['pages'])} "
              f"chars={doc.get('total_chars')}")
         docs.append(doc)
@@ -272,6 +281,12 @@ def run() -> int:
         "formulas": struct["formulas"],
         "references": struct["references"],
         "reading_order": struct["reading_order"],
+        "frontmatter": struct["frontmatter"],
+        "title": struct["frontmatter"]["title"],
+        "authors": struct["frontmatter"]["authors"],
+        "abstract": struct["frontmatter"]["abstract"],
+        "keywords": struct["frontmatter"]["keywords"],
+        "doi": struct["frontmatter"]["doi"],
         "full_text": full_text,
         "evidence": {
             "grounding": grounding,
@@ -337,6 +352,7 @@ def run() -> int:
              "anchor_quality": d.get("anchor_quality"),
              "pages": len(d.get("pages") or []),
              "total_chars": d.get("total_chars"),
+             "attempts": d.get("attempts"),
              "warnings": d.get("warnings")}
             for d in docs
         ],
@@ -352,6 +368,7 @@ def run() -> int:
         "limits": limits,
         "uncertainty": uncertainty,
         "inputs": found,
+        "engines_probed": extract.probe(),
         "task_md_chars": len(task_md),
         "outputs": {
             "result": str(target),
@@ -362,6 +379,78 @@ def run() -> int:
 
     _log(f"done: {target} | status={status} | {_elapsed()}s")
     return 0
+
+
+def _fallback_target(out_override: str | None) -> Path:
+    if out_override:
+        return Path(out_override)
+    for raw in ("/app/output", "/output"):
+        p = Path(raw)
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            probe = p / ".write_probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+            return p
+        except Exception:
+            continue
+    return Path.cwd() / "output"
+
+
+def _write_fallback(target: Path, *, status: str, limits: list[str],
+                    change_log: list[str], tb: str = "") -> None:
+    """Guarantee a result.json exists even when the run dies.
+
+    A killed container that leaves no file scores zero on every dimension, so a
+    minimal, honest document is strictly better than nothing.
+    """
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, Any] = {
+            "case_id": "",
+            "meta": {
+                "status": status,
+                "contract_detected": False,
+                "contract_field_count": 0,
+                "contract_fields_not_reported": [],
+                "limits": limits,
+                "uncertainty": [],
+                "change_log": change_log,
+            },
+        }
+        if tb:
+            payload["meta"]["traceback_tail"] = tb[-1200:]
+        (target / "result.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def run() -> int:
+    parser = argparse.ArgumentParser(description="reading chain: materials -> result.json")
+    parser.add_argument("--out", default=None, help="output directory")
+    ns = parser.parse_args()
+    out_override = ns.out
+
+    # Write a placeholder first: if the container kills us at the budget, the file
+    # still names the run and says it did not finish.
+    _write_fallback(_fallback_target(out_override), status="partial",
+                    limits=["run started; if this file was not replaced the run was interrupted"],
+                    change_log=["placeholder written at start of run"])
+
+    try:
+        return _run_body(out_override)
+    except BaseException as exc:  # noqa: BLE001 - never end a run without a result file
+        tb = traceback.format_exc(limit=8)
+        _log(f"FATAL {type(exc).__name__}: {exc}")
+        _write_fallback(
+            _fallback_target(out_override),
+            status="failed",
+            limits=[f"run aborted by {type(exc).__name__}: {exc}"],
+            change_log=["failure result written by the top-level handler"],
+            tb=tb,
+        )
+        return 1
 
 
 if __name__ == "__main__":

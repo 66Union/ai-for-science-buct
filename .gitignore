@@ -1,0 +1,29 @@
+# secrets & local tooling — never commit, never submit
+.secrets/
+.tools/
+.npm-cache/
+.tmp/
+.pylibs/
+
+# generated / bulky artifacts
+out/
+task-08/
+tasks/cli_inspect/
+tasks/playground-cli.tgz
+playground-arm.zip
+tests/fixture-*/
+tests/out-*/
+dryrun.log
+submit-*.log
+*.zip
+*.log
+
+# python / node noise
+__pycache__/
+*.pyc
+node_modules/
+
+# third-party material: organiser documents and API dumps stay out of the
+# public repo. The analysis write-up (our own words) is kept.
+manual_text.txt
+tasks/

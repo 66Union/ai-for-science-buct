@@ -89,6 +89,11 @@ SYNONYMS: dict[str, tuple[str, ...]] = {
     "literature": ("library", "ref_entries", "parsed_references", "bib_entries"),
     "manuscript_sections": ("sections", "outline", "section_structure"),
     "background_and_gap": ("background_and_gap", "background_gap"),
+    "payload": ("result_payload", "main_result", "structured_result", "result",
+                "output", "outputs", "deliverable"),
+    "summary_text": ("cover_letter", "honest_summary", "run_summary",
+                     "narrative_summary", "executive_summary"),
+    "deliverables": ("output_files", "artifacts", "files"),
 }
 
 # --------------------------------------------------------------------------- #
@@ -2545,6 +2550,54 @@ def cmd_finalize(out_dir: Path, work_dir: Path, stopwatch: "hybrid.Stopwatch",
         limits.insert(0, "status=partial: at least one part of the deliverable was rebuilt "
                          "from a deterministic baseline or failed a hard check; see "
                          "limits/degraded")
+
+    byte_map = files.get("bytes") or {}
+
+    def _artifact(path: Any, key: str) -> dict[str, Any]:
+        size = byte_map.get(key) if isinstance(byte_map, dict) else None
+        if size is None and isinstance(path, str) and path:
+            item = Path(path)
+            size = item.stat().st_size if item.is_file() else 0
+        return {"path": path, "bytes": size or 0}
+
+    deliverables = {kind: _artifact(files.get(kind), kind)
+                    for kind in ("docx", "markdown", "html", "full_markdown")}
+    deliverables["preview"] = preview
+    payload_value = {key: values[key] for key in (
+        "introduction", "background", "problem_statement", "gap_analysis", "related_work",
+        "contributions", "citation_coverage", "citation_inventory", "claim_evidence",
+        "revised_manuscript", "figure_table_map", "manuscript_sections", "literature",
+        "quality") if key in values}
+    payload_value["status"] = status
+    claimed = len(analysis["citation"]["cited_keys"])
+    claims_total = grounding.get("claims_total") or 0
+    located = grounding.get("located") or 0
+    strict = grounding.get("supported_by_quote") or 0
+    summary_text = (
+        "%d section(s) were inserted into the supplied manuscript (introduction rebuilt "
+        "from a deterministic baseline: %s; related-work entries: %s over %d comparison "
+        "dimension(s)). The bibliography holds %d entr(ies); the manuscript cites %d "
+        "(coverage %s) and the new text cites %d (coverage %s). %d claim(s) were "
+        "registered in the claim-evidence register, %d located in the manuscript "
+        "(location rate %s) and %d strictly supported by their own quote; %d claim(s) "
+        "could not be anchored and are listed as such. Deliverables: revised manuscript "
+        "(.docx / .md / .html) plus full markdown. Degraded parts: %s. Status: %s. "
+        "中文：本次写入引言与相关工作共 %d 节，文献库 %d 条、引用覆盖 %s，"
+        "claim 回源 %d/%d，无法落地 %d 条。"
+        % (len(assembled.get("sections_inserted") or []),
+           bool(intro.get("baseline")), related.get("works_total"),
+           len(related.get("dimensions") or []), library["library_size"], claimed,
+           coverage.get("manuscript_coverage_rate"),
+           coverage.get("cited_in_generated") or 0,
+           coverage.get("generated_coverage_rate"), claims_total, located,
+           grounding.get("location_rate"), strict, claims_total - located,
+           ", ".join(_unique(degraded)) or "none", status,
+           len(assembled.get("sections_inserted") or []), library["library_size"],
+           coverage.get("manuscript_coverage_rate"), located, claims_total,
+           claims_total - located))
+    values["payload"] = payload_value
+    values["summary_text"] = summary_text
+    values["deliverables"] = deliverables
 
     evidence = {
         "inputs": found,

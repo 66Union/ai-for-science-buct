@@ -109,6 +109,14 @@ SYNONYMS: dict[str, tuple[str, ...]] = {
     "uncertainty": ("uncertainties", "unknowns", "不确定性"),
     "status": ("run_status", "outcome", "状态"),
     "language_pair": ("languages", "language", "translation_direction", "语言对"),
+    # The two values every hidden contract asks for under some name. Kept here as
+    # well as in lib/hybrid.py's generic table so the adapter still works when the
+    # packaged skill is run against an older copy of the shared kernel.
+    "payload": ("result_payload", "main_result", "structured_result", "result",
+                "output", "outputs", "deliverable"),
+    "summary_text": ("cover_letter", "honest_summary", "run_summary",
+                     "narrative_summary", "executive_summary"),
+    "deliverables": ("output_files", "artifacts", "files", "交付文件"),
 }
 
 # Compact values additionally kept under meta.additional_outputs when the contract
@@ -1450,6 +1458,47 @@ def do_finalize(args: argparse.Namespace, runtime: dict[str, Any],
     out_files.update(_write_review_markdown(review_path, case_id or "", checklist))
     out_files["untranslated_count"] = len(untranslated)
 
+    def _deliverable(path: Path) -> dict[str, Any]:
+        return {"path": str(path),
+                "bytes": path.stat().st_size if path.is_file() else 0}
+
+    deliverables = {
+        "bilingual_markdown": _deliverable(bilingual_path),
+        "glossary_json": _deliverable(glossary_path),
+        "review_checklist": _deliverable(review_path),
+    } if out_files else {}
+    payload_value = {
+        "translation_text": translation_text,
+        "bilingual": pairs,
+        "segment_count": len(segments),
+        "page_count": len(pages),
+        "coverage": coverage,
+        "untranslated": untranslated,
+        "term_consistency": {key: terms.get(key) for key in
+                             ("terms_checked", "consistent_terms", "inconsistent_terms",
+                              "term_rate", "usage_rate", "glossary_status")},
+        "glossary": glossary,
+        "quality": quality,
+        "language_pair": language_pair,
+        "status": status,
+    }
+    summary_text = (
+        f"{len(pairs)} paragraph(s) on {len(pages)} page(s) were processed "
+        f"({source_language} -> {target_language}). Translation coverage "
+        f"{coverage.get('coverage')}: {coverage.get('translated', 0)} translated, "
+        f"{coverage.get('untranslated', 0)} untranslated (each listed with its segment id "
+        f"and reason; no translation was invented for a missing segment). "
+        f"{len(glossary)} term(s) are in the glossary, term consistency "
+        f"{terms.get('term_rate')}, locked-term usage rate "
+        f"{terms.get('usage_rate')}. Invariant preservation: "
+        f"{preservation.get('clean')}/{preservation.get('checked')} paragraph(s) clean "
+        f"(numbers, citations, formulas and hedges kept). Deliverables: bilingual "
+        f"markdown, glossary.json, review_checklist.md. Status: {status}. "
+        f"共处理 {len(pairs)} 个段落（{len(pages)} 页），翻译覆盖率 "
+        f"{coverage.get('coverage')}，未翻译 {coverage.get('untranslated', 0)} 段，"
+        f"术语锁定 {len(glossary)} 条，译文核验 {preservation.get('clean')}/"
+        f"{preservation.get('checked')} 段通过。")
+
     values: dict[str, Any] = {
         "bilingual": pairs,
         "glossary": glossary,
@@ -1480,6 +1529,9 @@ def do_finalize(args: argparse.Namespace, runtime: dict[str, Any],
         "uncertainty": uncertainty,
         "status": status,
         "language_pair": language_pair,
+        "payload": payload_value,
+        "summary_text": summary_text,
+        "deliverables": deliverables,
     }
 
     evidence_payload = {

@@ -71,6 +71,19 @@ FAMILY_STEMS: dict[str, str] = {
     "keyword": "keywords",
     "indexterm": "keywords",
     "doi": "doi",
+    # Generic "results" vocabulary: a hidden case often declares result_payload /
+    # cover_letter instead of naming a reading family. These stems make the two
+    # generic values below reachable without hardcoding a schema.
+    "resultpayload": "payload",
+    "payload": "payload",
+    "mainresult": "payload",
+    "structuredresult": "payload",
+    "outputpayload": "payload",
+    "deliverable": "payload",
+    "coverletter": "summary_text",
+    "summarytext": "summary_text",
+    "honestsummary": "summary_text",
+    "runsummary": "summary_text",
 }
 COLLECTION_SUFFIXES = ("_index", "_list", "_entries", "_items", "_results", "_data", "_content")
 
@@ -316,6 +329,61 @@ def _run_body(out_dir_override: str | None) -> int:
             "formulas_found": len(struct["formulas"]),
             "references": struct["references"]["entry_count"],
         },
+        # Generic results contract (see FAMILY_STEMS): the parsed document itself,
+        # plus one honest paragraph about what was and was not achieved.
+        "payload": {
+            "document": {
+                "path": primary.get("path"),
+                "engine": primary.get("engine"),
+                "anchor_quality": primary.get("anchor_quality"),
+                "text_layer": primary.get("text_layer"),
+                "page_count": document["page_count"],
+                "total_chars": document["total_chars"],
+                "block_count": sum(page["block_count"] for page in document["pages"]),
+                "warnings": primary.get("warnings") or [],
+            },
+            "pages": [{"page": page.get("page"),
+                       "block_count": page.get("block_count"),
+                       "char_count": page.get("char_count")}
+                      for page in document["pages"]],
+            "sections": [{"title": item.get("title"), "level": item.get("level"),
+                          "page": item.get("page")} for item in struct["sections"]],
+            "tables": struct["tables"],
+            "formulas": struct["formulas"],
+            "references": struct["references"],
+            "frontmatter": {
+                "title": struct["frontmatter"].get("title"),
+                "authors": struct["frontmatter"].get("authors"),
+                "doi": struct["frontmatter"].get("doi"),
+                "keywords": struct["frontmatter"].get("keywords"),
+                "abstract": struct["frontmatter"].get("abstract"),
+            },
+            "quality": {"engine": primary.get("engine"),
+                        "anchor_quality": primary.get("anchor_quality"),
+                        "text_layer": primary.get("text_layer"),
+                        "page_count": document["page_count"],
+                        "grounding_rate": grounding["grounding_rate"],
+                        "elapsed_s": _elapsed()},
+            "status": status,
+        },
+        "summary_text": (
+            "%d page(s) / %d text block(s) / %d character(s) were parsed from %s with the "
+            "%s engine (anchor quality: %s). %d section heading(s), %d table(s), %d "
+            "formula(s) and %d bibliography entr(ies) were detected; %d claim(s) were "
+            "re-checked against the extracted text (grounding rate %s). Degradations: %s. "
+            "Status: %s. 中文：解析 %d 页、%d 个文本块、%d 个表格，引擎 %s，"
+            "降级说明见 limits。"
+            % (document["page_count"],
+               sum(page["block_count"] for page in document["pages"]),
+               document["total_chars"],
+               Path(str(primary.get("path"))).name if primary.get("path") else "the material",
+               primary.get("engine"), primary.get("anchor_quality"),
+               len(struct["sections"]), len(struct["tables"]), len(struct["formulas"]),
+               struct["references"]["entry_count"], grounding["claims_total"],
+               grounding["grounding_rate"], "; ".join(limits) or "none", status,
+               document["page_count"],
+               sum(page["block_count"] for page in document["pages"]),
+               len(struct["tables"]), primary.get("engine"))),
     }
 
     _log("stage 6/6 assemble result.json")

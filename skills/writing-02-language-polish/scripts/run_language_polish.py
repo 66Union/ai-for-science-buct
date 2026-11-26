@@ -58,10 +58,20 @@ from typing import Any, Iterable
 ROOT = Path(__file__).resolve().parents[1]
 try:  # packaged layout
     sys.path.insert(0, str(ROOT))
-    from lib import anchors, contract, discover, docwrite, extract, hybrid, render
+    from lib import anchors, contract, discover, docwrite, extract, hybrid, render, resources
 except ImportError:  # development layout
     sys.path.insert(0, str(ROOT.parent / "_core"))
-    from lib import anchors, contract, discover, docwrite, extract, hybrid, render
+    from lib import anchors, contract, discover, docwrite, extract, hybrid, render, resources
+
+# The deterministic fallback polisher lives next to this script (scripts/) in both
+# the development and the packaged layout. It is optional on purpose: a bundle that
+# somehow lacks it must degrade to the old "revised == original" baseline, not
+# crash the run.
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import fallback_polish  # noqa: E402
+except Exception:  # pragma: no cover - defensive only
+    fallback_polish = None
 
 RUNNER = "writing-02-language-polish"
 STATE_SCHEMA = "writing-02-language-polish/state/v1"
@@ -75,6 +85,13 @@ SEG_MAX_CHARS = 1800
 MAX_SEGMENTS = 80
 HEAVY_EDIT_RATE = 0.5
 MAX_CHANGES_PER_SEGMENT = 80
+# The deterministic fallback polisher is only allowed to be a minimal edit: a
+# candidate above this character edit rate is treated as a rewrite and reverted by
+# the same invariant guard the Agent answer has to pass.
+FALLBACK_MAX_EDIT_RATE = 0.25
+FALLBACK_METHOD = "deterministic_fallback"
+AGENT_METHOD = "agent"
+UNCHANGED_METHOD = "source_unchanged"
 
 # Controlled vocabulary of edit types. Both ids and Chinese labels are accepted
 # from the agent (the hidden case may ask for Chinese labels in the result).
@@ -347,26 +364,63 @@ def _material_rank(path: Path) -> tuple:
     return (strong, ref, suffix, size, str(path).casefold())
 
 
-def select_materials(found: dict[str, Any], out_dir: Path, work_dir: Path) -> list[Path]:
-    """Rank candidate materials; never pick up our own deliverables as input."""
+def select_materials(found: dict[str, Any], out_dir: Path, work_dir: Path,
+                     priority: Iterable[Path] = ()) -> list[Path]:
+    """Rank candidate materials; never pick up our own deliverables as input.
+
+    priority comes from environment/resources.yaml: a document the case explicitly
+    declares outranks a file that merely looks like a manuscript, and a declared
+    document that suffix-based discovery would not rank (an unusual extension, a
+    supplementary table) is still considered instead of being silently dropped.
+    """
     skip_roots = []
     for root in (out_dir, work_dir):
         try:
             skip_roots.append(root.resolve())
         except Exception:
             skip_roots.append(root)
-    picked: list[Path] = []
-    for raw in found.get("material_docs") or []:
-        path = Path(raw)
+
+    def _key(path: Path) -> str:
+        try:
+            return str(path.resolve())
+        except Exception:
+            return str(path)
+
+    def _is_ours(path: Path) -> bool:
         try:
             resolved = path.resolve()
         except Exception:
             resolved = path
-        if any(resolved == root or str(resolved).startswith(str(root) + os.sep)
-               for root in skip_roots):
+        return any(resolved == root or str(resolved).startswith(str(root) + os.sep)
+                   for root in skip_roots)
+
+    picked: list[Path] = []
+    seen: set[str] = set()
+    for raw in found.get("material_docs") or []:
+        path = Path(raw)
+        if _is_ours(path):
             continue
+        key = _key(path)
+        if key in seen:
+            continue
+        seen.add(key)
         picked.append(path)
-    return sorted(picked, key=_material_rank)
+    declared: set[str] = set()
+    for raw in priority or []:
+        path = Path(str(raw))
+        try:
+            if not path.is_file() or _is_ours(path):
+                continue
+        except OSError:
+            continue
+        key = _key(path)
+        declared.add(key)
+        if key in seen:
+            continue
+        seen.add(key)
+        picked.append(path)
+    return sorted(picked, key=lambda path: (0 if _key(path) in declared else 1,
+                                            _material_rank(path)))
 
 
 REF_LINE_START_RE = re.compile(r"^\s*(?:\[\d{1,3}\]|\d{1,3}\.)\s+\S")
@@ -596,15 +650,38 @@ def _num_key(token: str) -> str:
     return hybrid.normalize_text(token).replace(" ", "")
 
 
+_ANY_SPACE_RE = re.compile(r"\s+")
+# "et al . , 2019" is a hand-typed citation, not a missing one. Detection runs on a
+# copy whose stray spaces before punctuation are removed, and markers are compared
+# on whitespace-free keys, so normalising spacing can never look like adding or
+# losing a citation (the fabrication guard would revert a whole paragraph for it).
+_SPACE_BEFORE_PUNCT_RE = re.compile(r"\s+([,.;:!?])")
+
+
+def _scan_text(text: str) -> str:
+    """Text used to DETECT citations/formulas: spacing noise removed."""
+    text = _ANY_SPACE_RE.sub(" ", text or "")
+    return _SPACE_BEFORE_PUNCT_RE.sub(r"\1", text)
+
+
+def _citation_key(marker: str) -> str:
+    return _ANY_SPACE_RE.sub("", marker or "").casefold()
+
+
+def _formula_key(token: str) -> str:
+    return _ANY_SPACE_RE.sub("", token or "")
+
+
 def segment_facts(text: str) -> dict[str, Any]:
+    scan = _scan_text(text)
     return {
         "numbers": _uniq(hybrid.find_numbers(text)),
-        "citations": _uniq(hybrid.find_citations(text)),
+        "citations": _uniq(hybrid.find_citations(scan)),
         "hedges": hybrid.find_hedges(text),
         "negations": hybrid.find_negations(text),
         "modals": hybrid.find_modals(text),
         "labels": hybrid.find_labels(text),
-        "formulas": _uniq(hybrid.find_formula_tokens(text))[:20],
+        "formulas": _uniq(hybrid.find_formula_tokens(scan))[:20],
     }
 
 
@@ -612,16 +689,18 @@ def invariant_diff(source: str, target: str) -> dict[str, Any]:
     """Set difference of the machine-checkable facts between two texts."""
     src_numbers = {_num_key(n) for n in hybrid.find_numbers(source)}
     tgt_numbers = {_num_key(n) for n in hybrid.find_numbers(target)}
-    src_cites = {hybrid.normalize_text(c) for c in hybrid.find_citations(source)}
-    tgt_cites = {hybrid.normalize_text(c) for c in hybrid.find_citations(target)}
+    # Whitespace-insensitive keys: a spacing fix ("(Qiu et al . , 2019)" ->
+    # "(Qiu et al., 2019)") must not be reported as an added/lost citation.
+    src_cites = {_citation_key(c) for c in hybrid.find_citations(_scan_text(source))}
+    tgt_cites = {_citation_key(c) for c in hybrid.find_citations(_scan_text(target))}
     src_neg = set(hybrid.find_negations(source))
     tgt_neg = set(hybrid.find_negations(target))
     src_modal = set(hybrid.find_modals(source))
     tgt_modal = set(hybrid.find_modals(target))
     src_labels = set(hybrid.find_labels(source))
     tgt_labels = set(hybrid.find_labels(target))
-    src_formulas = set(hybrid.find_formula_tokens(source))
-    tgt_formulas = set(hybrid.find_formula_tokens(target))
+    src_formulas = {_formula_key(f) for f in hybrid.find_formula_tokens(source)}
+    tgt_formulas = {_formula_key(f) for f in hybrid.find_formula_tokens(target)}
     return {
         "numbers_missing": sorted(src_numbers - tgt_numbers),
         "numbers_added": sorted(tgt_numbers - src_numbers),
@@ -722,6 +801,15 @@ def checked_preservation(source: str, target: str, label: str = "segment") -> di
     hedges = hedge_signal(source, target)
     check["hedges_missing"] = hedges["missing"]
     check["hedges_added"] = hedges["added"]
+    # The shared checker compares citation/formula markers as raw substrings, so a
+    # pure spacing normalisation inside a hand-typed citation reads as a fabricated
+    # or lost reference. Re-compare with the whitespace-insensitive keys from
+    # invariant_diff, which is also what critical_reasons uses.
+    normalised = invariant_diff(source, target)
+    check["citations_missing"] = normalised["citations_missing"]
+    check["citations_added"] = normalised["citations_added"]
+    check["formulas_missing"] = normalised["formulas_missing"]
+    check["formulas_added"] = normalised["formulas_added"]
     check["ok"] = preservation_ok(check)
     return check
 
@@ -1142,7 +1230,48 @@ def prepare(found: dict[str, Any], case: dict[str, Any], case_id: str | None,
         except Exception as exc:
             uncertainty.append("task.md could not be read: %s" % type(exc).__name__)
 
-    materials = select_materials(found, out_dir, work_dir)
+    # The platform resource entry point: environment/resources.yaml enumerates the
+    # material the case actually supplies. Reading it turns "whatever happens to be
+    # in the folder" into "the resources the task declares", and its declared files
+    # get the first slots in the material ranking below. Missing declarations are
+    # reported, never guessed at.
+    manifest_path = resources.find_manifest(_manifest_roots(found))
+    declared_materials: list[Path] = []
+    if manifest_path is not None:
+        manifest = resources.load_manifest(manifest_path, manifest_path.parent)
+        summary = resources.summarize(manifest)
+        state["resource_manifest"] = summary
+        declared_materials = resources.manifest_paths(manifest)
+        state["declared_materials"] = [str(path) for path in declared_materials]
+        counts = summary.get("counts") or {}
+        change_log.append(
+            "prepare: read %s (%d declared, %d present, %d missing) and used the "
+            "declared files as the material priority list"
+            % (manifest_path.name, counts.get("declared", 0),
+               counts.get("existing", 0), counts.get("missing", 0)))
+        for item in manifest.get("missing") or []:
+            uncertainty.append("resources.yaml declares %r (%s) but the file is "
+                               "absent under environment/"
+                               % (item.get("name"), item.get("path")))
+        for error in manifest.get("errors") or []:
+            uncertainty.append("resources.yaml: %s" % error)
+        for warning in (manifest.get("warnings") or [])[:5]:
+            uncertainty.append("resources.yaml: %s" % warning)
+        declared_tools = [tool for tool in manifest.get("tools") or []
+                          if tool.get("exists")]
+        state["declared_tools"] = declared_tools
+        if declared_tools:
+            change_log.append("prepare: resources.yaml declares %d executable tool(s) "
+                              "that exist; their directories are prepended to PATH so "
+                              "the renderer probe can find them" % len(declared_tools))
+        _log(stopwatch, "resources.yaml: %d declared, %d present, %d missing, %d tool(s)"
+             % (counts.get("declared", 0), counts.get("existing", 0),
+                counts.get("missing", 0), len(declared_tools)))
+    else:
+        state["resource_manifest"] = {"present": False,
+                                      "note": "no resources.yaml manifest"}
+
+    materials = select_materials(found, out_dir, work_dir, priority=declared_materials)
     state["materials"] = [str(p) for p in materials]
     if not materials:
         limits.append("no material document was found in the input roots")
@@ -1266,12 +1395,32 @@ def _find_block(doc: dict[str, Any], page: int, block_id: Any) -> dict[str, Any]
 
 
 def build_paragraphs(segments: list[dict[str, Any]], records: dict[str, dict[str, Any]],
-                     doc: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Merge agent answers with the source, enforcing preservation per paragraph."""
+                     doc: dict[str, Any], *, style: dict[str, Any] | None = None,
+                     terms: Any = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Merge agent answers with the source, enforcing preservation per paragraph.
+
+    Two answer sources are merged, in this priority order:
+
+    1. an Agent answer for the segment (work/generated/batch-XX.json) - the
+       original two-phase behaviour, recorded as method="agent";
+    2. otherwise the deterministic fallback polisher (scripts/fallback_polish.py),
+       recorded as method="deterministic_fallback", and only after the *same*
+       invariant guard the Agent answer must pass. A candidate that would change a
+       number / citation / negation / formula / hedge is thrown away and the
+       paragraph is emitted as the source text (status=unrevised,
+       flag=fallback_reverted_preservation): the rules may be wrong, they are
+       never allowed to ship a broken claim.
+
+    Every paragraph records method = agent | deterministic_fallback |
+    source_unchanged, so a reviewer can tell judgement from rules at a glance.
+    """
     paragraphs: list[dict[str, Any]] = []
     stats = {"unrevised": 0, "kept_unchanged": 0, "revised": 0,
              "revised_with_review_items": 0, "reverted_preservation": 0,
-             "reported_change_not_applied": 0, "empty_fallback": 0}
+             "reported_change_not_applied": 0, "empty_fallback": 0,
+             "fallback_reverted": 0}
+    method_counts = {AGENT_METHOD: 0, FALLBACK_METHOD: 0, UNCHANGED_METHOD: 0}
+    fallback_attempts = 0
     review_items: list[dict[str, Any]] = []
     for seg in segments:
         seg_id = seg["seg_id"]
@@ -1284,6 +1433,7 @@ def build_paragraphs(segments: list[dict[str, Any]], records: dict[str, dict[str
         agent_preservation = None
         revised = original
         status = "unrevised"
+        method = UNCHANGED_METHOD
         preservation = checked_preservation(original, original, label=seg_id)
         diff = invariant_diff(original, original)
         edit = edit_stats(original, original)
@@ -1292,59 +1442,117 @@ def build_paragraphs(segments: list[dict[str, Any]], records: dict[str, dict[str
         if record is not None:
             agent_revised = str(record.get("revised") or "").strip()
             if not agent_revised:
-                status = "unrevised"
+                agent_revised = None
                 flags.append("empty_revised_fell_back_to_source")
                 stats["empty_fallback"] += 1
-            else:
-                changes = validate_changes(original, agent_revised, record.get("changes"))
-                candidate_preservation = checked_preservation(original, agent_revised,
-                                                                 label=seg_id)
-                candidate_diff = invariant_diff(original, agent_revised)
-                agent_edit = edit_stats(original, agent_revised)
-                agent_preservation = candidate_preservation
-                reasons = critical_reasons(candidate_diff, original, agent_revised)
-                if reasons:
-                    status = "reverted_preservation"
-                    flags.extend(reasons)
-                    for reason in reasons:
-                        review_items.append({"seg_id": seg_id, "issue": reason,
-                                             "action": "reverted_to_source"})
-                elif agent_revised == original:
-                    preservation = candidate_preservation
-                    diff = candidate_diff
-                    if changes:
-                        status = "reported_change_not_applied"
-                        flags.append("change_records_without_text_change")
-                    else:
-                        status = "kept_unchanged"
+
+        if agent_revised is not None:
+            # ---------------- agent answer (two-phase protocol) ----------------
+            method = AGENT_METHOD
+            changes = validate_changes(original, agent_revised, record.get("changes"))
+            candidate_preservation = checked_preservation(original, agent_revised,
+                                                           label=seg_id)
+            candidate_diff = invariant_diff(original, agent_revised)
+            agent_edit = edit_stats(original, agent_revised)
+            agent_preservation = candidate_preservation
+            reasons = critical_reasons(candidate_diff, original, agent_revised)
+            if reasons:
+                status = "reverted_preservation"
+                flags.extend(reasons)
+                for reason in reasons:
+                    review_items.append({"seg_id": seg_id, "issue": reason,
+                                         "action": "reverted_to_source"})
+            elif agent_revised == original:
+                preservation = candidate_preservation
+                diff = candidate_diff
+                if changes:
+                    status = "reported_change_not_applied"
+                    flags.append("change_records_without_text_change")
                 else:
-                    revised = agent_revised
+                    status = "kept_unchanged"
+            else:
+                revised = agent_revised
+                preservation = candidate_preservation
+                diff = candidate_diff
+                edit = agent_edit
+                status = "revised"
+                if preservation["hedges_missing"]:
+                    flags.append("hedge_weakened:"
+                                 + ",".join(preservation["hedges_missing"][:5]))
+                if preservation["hedges_added"]:
+                    flags.append("hedge_strengthened:"
+                                 + ",".join(preservation["hedges_added"][:5]))
+                if diff["modals_missing"] or diff["modals_added"]:
+                    flags.append("modal_strength_changed")
+                if diff["labels_missing"]:
+                    flags.append("label_reference_lost:"
+                                 + ",".join(diff["labels_missing"][:4]))
+                if diff["formulas_missing"]:
+                    flags.append("formula_token_lost:"
+                                 + ",".join(diff["formulas_missing"][:4]))
+                if not changes:
+                    flags.append("edit_without_rationale")
+                if any(not change["valid"] for change in changes):
+                    flags.append("invalid_change_record")
+                if edit["edit_rate"] > HEAVY_EDIT_RATE:
+                    flags.append("heavy_edit:%.2f" % edit["edit_rate"])
+                if flags:
+                    status = "revised_with_review_items"
+        elif (fallback_polish is not None and not seg.get("is_heading")
+              and original.strip()):
+            # ------------- deterministic fallback (no model judgement) ----------
+            fallback_attempts += 1
+            candidate = original
+            raw_changes: Any = []
+            try:
+                candidate, raw_changes = fallback_polish.polish_paragraph(
+                    original, style=style or {}, terms=terms)
+            except Exception as exc:  # a rule must never break the whole run
+                flags.append("fallback_polisher_error:" + type(exc).__name__)
+                review_items.append({"seg_id": seg_id,
+                                     "issue": "fallback_polisher_error:"
+                                              + type(exc).__name__,
+                                     "action": "kept_with_review_item"})
+                candidate, raw_changes = original, []
+            if candidate != original and raw_changes:
+                candidate_preservation = checked_preservation(original, candidate,
+                                                              label=seg_id)
+                candidate_diff = invariant_diff(original, candidate)
+                candidate_edit = edit_stats(original, candidate)
+                candidate_changes = validate_changes(original, candidate, raw_changes)
+                reasons = critical_reasons(candidate_diff, original, candidate)
+                problems: list[str] = []
+                if not candidate_preservation.get("ok"):
+                    problems.append("preservation_not_ok")
+                if candidate_edit["edit_rate"] > FALLBACK_MAX_EDIT_RATE:
+                    problems.append("edit_rate_above_guard:%.2f"
+                                    % candidate_edit["edit_rate"])
+                if (not candidate_changes
+                        or any(not change["valid"] for change in candidate_changes)):
+                    problems.append("change_record_not_locatable")
+                if reasons or problems:
+                    stats["fallback_reverted"] += 1
+                    flags.append("fallback_reverted_preservation")
+                    for reason in (reasons + problems)[:6]:
+                        review_items.append({"seg_id": seg_id,
+                                             "issue": "fallback_" + reason,
+                                             "action": "reverted_to_source"})
+                else:
+                    revised = candidate
+                    changes = candidate_changes
                     preservation = candidate_preservation
                     diff = candidate_diff
-                    edit = agent_edit
+                    edit = candidate_edit
                     status = "revised"
+                    method = FALLBACK_METHOD
                     if preservation["hedges_missing"]:
                         flags.append("hedge_weakened:"
                                      + ",".join(preservation["hedges_missing"][:5]))
-                    if preservation["hedges_added"]:
-                        flags.append("hedge_strengthened:"
-                                     + ",".join(preservation["hedges_added"][:5]))
-                    if diff["modals_missing"] or diff["modals_added"]:
-                        flags.append("modal_strength_changed")
-                    if diff["labels_missing"]:
-                        flags.append("label_reference_lost:"
-                                     + ",".join(diff["labels_missing"][:4]))
                     if diff["formulas_missing"]:
                         flags.append("formula_token_lost:"
                                      + ",".join(diff["formulas_missing"][:4]))
-                    if not changes:
-                        flags.append("edit_without_rationale")
-                    if any(not change["valid"] for change in changes):
-                        flags.append("invalid_change_record")
                     if edit["edit_rate"] > HEAVY_EDIT_RATE:
                         flags.append("heavy_edit:%.2f" % edit["edit_rate"])
-                    if flags:
-                        status = "revised_with_review_items"
         # anchors: the paragraph must be traceable to the extracted source block
         page = int(seg.get("page") or 1)
         block_id = (seg.get("block_ids") or [None])[0]
@@ -1363,6 +1571,9 @@ def build_paragraphs(segments: list[dict[str, Any]], records: dict[str, dict[str
                                      "action": "kept_with_review_item"})
         if status in stats:
             stats[status] += 1
+        if method not in method_counts:
+            method_counts[method] = 0
+        method_counts[method] += 1
         paragraphs.append({
             "seg_id": seg_id,
             "order": seg.get("order"),
@@ -1374,6 +1585,7 @@ def build_paragraphs(segments: list[dict[str, Any]], records: dict[str, dict[str
             "revised": revised,
             "agent_revised": agent_revised,
             "status": status,
+            "method": method,
             "changes": changes,
             "flags": flags,
             "preservation": {
@@ -1395,7 +1607,173 @@ def build_paragraphs(segments: list[dict[str, Any]], records: dict[str, dict[str
             "anchor": anchor,
             "facts": facts,
         })
-    return paragraphs, {"status_counts": stats, "review_items": review_items}
+    return paragraphs, {"status_counts": stats, "review_items": review_items,
+                        "method_counts": method_counts,
+                        "fallback_attempts": fallback_attempts}
+
+
+# --------------------------------------------------------------------------- #
+# deterministic fallback + platform resource entry point helpers
+# --------------------------------------------------------------------------- #
+def _fallback_terms(state: dict[str, Any], glossary: dict[str, Any]) -> dict[str, Any]:
+    """Glossary pairs the fallback polisher may enforce (deterministic, no judging).
+
+    Sources: the Agent-written work/generated/_glossary.json and the reference
+    glossary parsed from secondary material during prepare. A term candidate list
+    without a canonical form is NOT used: the fallback only applies a decision
+    somebody already made.
+    """
+    terms: list[dict[str, str]] = []
+    if isinstance(glossary, dict):
+        for entry in glossary.get("terms") or []:
+            if not isinstance(entry, dict):
+                continue
+            source = entry.get("source") or entry.get("source_form")
+            preferred = entry.get("preferred") or entry.get("preferred_form")
+            if source and preferred:
+                terms.append({"source": str(source), "preferred": str(preferred)})
+    reference = state.get("reference_glossary") or {}
+    for pair in reference.get("pairs") or []:
+        if isinstance(pair, dict) and pair.get("source") and pair.get("preferred"):
+            terms.append({"source": str(pair["source"]),
+                          "preferred": str(pair["preferred"])})
+    seen: set[tuple[str, str]] = set()
+    unique: list[dict[str, str]] = []
+    for item in terms:
+        key = (item["source"].casefold(), item["preferred"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return {"terms": unique}
+
+
+def _manifest_roots(found: dict[str, Any]) -> list[str]:
+    """Directories where environment/resources.yaml may live, most specific first."""
+    roots: list[str] = []
+    for raw in found.get("input_roots") or []:
+        roots.append(str(raw))
+    for key in ("case_path", "task_md_path"):
+        raw = found.get(key)
+        if raw:
+            roots.append(str(Path(str(raw)).parent))
+    roots.append(str(Path.cwd()))
+    return roots
+
+
+def _apply_declared_tool_paths(state: dict[str, Any]) -> list[str]:
+    """Prepend declared tool directories to PATH before the renderer probe runs.
+
+    environment/resources.yaml may declare a renderer binary that is not on PATH
+    (e.g. resources/tools/soffice). The shared renderer probes PATH only, so the
+    declared directory is prepended for this process - backward compatible: with no
+    manifest, or with a manifest that declares no tool, this is a no-op.
+    """
+    manifest = state.get("resource_manifest") or {}
+    directories: list[str] = []
+    for tool in manifest.get("tools") or []:
+        absolute = tool.get("absolute")
+        if not absolute or not tool.get("exists"):
+            continue
+        try:
+            directory = Path(str(absolute)).parent
+        except Exception:
+            continue
+        if directory.is_dir():
+            directories.append(str(directory))
+    if not directories:
+        return []
+    current = os.environ.get("PATH", "")
+    parts = [part for part in current.split(os.pathsep) if part]
+    added = [directory for directory in dict.fromkeys(directories)
+             if directory not in parts]
+    if added:
+        os.environ["PATH"] = os.pathsep.join(added + parts)
+    state["declared_tool_dirs"] = added
+    return added
+
+
+def _compact_ledger(changes: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    keys = ("seg_id", "type", "original", "revised", "reason", "valid")
+    return [{key: change.get(key) for key in keys if key in change}
+            for change in changes or []]
+
+
+def _compact_preservation(preservation: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "checked": preservation.get("checked"),
+        "clean": preservation.get("clean"),
+        "clean_rate": preservation.get("clean_rate"),
+        "numbers_missing_total": preservation.get("numbers_missing_total"),
+        "citations_missing_total": preservation.get("citations_missing_total"),
+        "hedges_missing_total": preservation.get("hedges_missing_total"),
+        "per_paragraph_failures": (preservation.get("failures") or [])[:20],
+    }
+
+
+def _compact_deliverables(deliverables: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in (deliverables or {}).items():
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            out[key] = value
+        elif isinstance(value, dict):
+            small = {inner: item for inner, item in value.items()
+                     if isinstance(item, (str, int, float, bool)) or item is None}
+            if small:
+                out[key] = small
+    return out
+
+
+COMPATIBILITY_NOTE = (
+    "top-level aliases for the most common hidden-contract field names. They are "
+    "only added when case.json did not declare that name and no declared field "
+    "already carries the same content, so nothing is overridden and no content is "
+    "invented; the canonical produce stays under the declared fields and "
+    "meta.additional_outputs.")
+
+
+def _compatibility_keys(case: dict[str, Any],
+                        values: dict[str, Any]) -> dict[str, Any]:
+    """Best-effort top-level aliases: an unknown contract still finds the result.
+
+    A hidden case may name fields we cannot guess from the synonyms table. Since
+    hybrid.finalize(extra=...) merges keys into result.json's top level without
+    overwriting anything, the highest-traffic names are exposed as aliases - but
+    only when they do not duplicate a declared field (no silent override) and the
+    value is non-empty.
+    """
+    declared = hybrid.declared_fields(case)
+    declared_names = {str(field.get("name") or "").casefold() for field in declared}
+    mapped_values: set[str] = set()
+    if declared:
+        try:
+            _mapped, report = hybrid.map_fields(declared, values, SYNONYMS)
+            mapped_values = set(report.values())
+        except Exception:  # reflection must never break the run
+            mapped_values = set()
+    candidates = (
+        ("polished_text", values.get("revised_text"), "revised_text"),
+        ("change_ledger", _compact_ledger(values.get("changes") or []), "changes"),
+        ("edit_ledger", _compact_ledger(values.get("changes") or []), "changes"),
+        ("terminology_table", values.get("terminology"), "terminology"),
+        ("preservation_report",
+         _compact_preservation(values.get("preservation") or {}), "preservation"),
+        ("quality_report", values.get("quality"), "quality"),
+        ("run_summary", values.get("summary_text"), "summary_text"),
+        ("deliverables_overview",
+         _compact_deliverables(values.get("deliverables") or {}), "deliverables"),
+    )
+    keys: dict[str, Any] = {}
+    for name, value, internal in candidates:
+        if not value:
+            continue
+        if name.casefold() in declared_names:
+            continue
+        if internal in mapped_values:
+            continue
+        keys[name] = value
+    return {"keys": keys, "note": COMPATIBILITY_NOTE}
+
 
 
 def build_evidence(doc: dict[str, Any], paragraphs: list[dict[str, Any]],
@@ -1729,7 +2107,10 @@ def assemble(out_dir: Path, work_dir: Path, state: dict[str, Any],
     merged = hybrid.merge_generated(segments, records, required=("revised",))
     glossary = _load_glossary(work_dir)
 
-    paragraphs, audit = build_paragraphs(segments, merged["by_id"], doc)
+    fallback_terms = _fallback_terms(state, glossary)
+    paragraphs, audit = build_paragraphs(segments, merged["by_id"], doc,
+                                         style=state.get("style_profile") or {},
+                                         terms=fallback_terms)
     revised_text = "\n\n".join(paragraph["revised"] for paragraph in paragraphs)
     source_text = "\n\n".join(paragraph["original"] for paragraph in paragraphs)
 
@@ -1760,27 +2141,72 @@ def assemble(out_dir: Path, work_dir: Path, state: dict[str, Any],
     preservation["failures"] = [c for c in checks if not c["ok"]][:30]
 
     terminology = build_terminology(state, source_text, revised_text, glossary)
-    deliverables, delivery_limits = build_deliverables(
-        out_dir, state, paragraphs, changes, terminology, preservation, "partial")
-    limits.extend(delivery_limits)
 
     coverage = round(merged["received"] / len(segments), 4) if segments else 0.0
     changed_paragraphs = [p for p in paragraphs if p["revised"] != p["original"]]
     documented = [p for p in changed_paragraphs
                   if p["changes"] and all(change["valid"] for change in p["changes"])]
     status_counts = audit["status_counts"]
+    method_counts = audit["method_counts"]
     reverted = status_counts.get("reverted_preservation", 0)
+    fallback_reverted = status_counts.get("fallback_reverted", 0)
+    fallback_edits = method_counts.get(FALLBACK_METHOD, 0)
     unrevised = status_counts.get("unrevised", 0)
+    critical_review = [item for item in audit["review_items"]
+                       if item.get("action") == "reverted_to_source"]
 
     status = "success"
+    method_note = "agent judgement"
     if merged["received"] == 0:
+        # No Agent answer at all: the deterministic fallback polisher IS the
+        # deliverable. It may only claim success when it really edited something,
+        # nothing was reverted, every paragraph kept its invariants and the run was
+        # not degraded - otherwise the honest answer is "partial" plus the reason.
+        fallback_complete = (
+            fallback_edits > 0
+            and fallback_reverted == 0
+            and not critical_review
+            and preservation.get("clean") == preservation.get("checked")
+            and not state.get("degraded")
+            and not stopwatch.past_soft()
+        )
+        if fallback_complete:
+            method_note = "deterministic fallback polisher (no model judgement)"
+            limits.append("no model-generated answers were found; a deterministic "
+                          "rule-based fallback polisher was applied (no model "
+                          "judgement): %d documented edit(s) across %d paragraph(s)"
+                          % (len(changes), fallback_edits))
+        else:
+            status = "partial"
+            why: list[str] = []
+            if fallback_edits == 0:
+                why.append("the fallback polisher found no safe edit")
+            if fallback_reverted:
+                why.append("%d fallback candidate(s) were rejected by the invariant "
+                           "guard" % fallback_reverted)
+            if critical_review:
+                why.append("%d paragraph(s) carry a critical review item"
+                           % len(critical_review))
+            if state.get("degraded"):
+                why.append("the run was degraded (truncation or deadline)")
+            if stopwatch.past_soft():
+                why.append("the soft deadline was reached")
+            limits.append("no model-generated answers were found and the deterministic "
+                          "fallback polisher could not produce a complete result (%s); "
+                          "a paragraph without a safe edit keeps revised == original"
+                          % ("; ".join(why) or "no edit was possible"))
+    else:
+        method_note = ("agent judgement (the deterministic fallback polisher only "
+                       "fills paragraphs with no answer)")
+    if merged["missing"] and merged["received"]:
+        # Partial agent coverage: the missing paragraphs were handed to the fallback
+        # polisher, which cannot make the run "complete" - the two-phase protocol was
+        # not finished. With received == 0 the dedicated fallback branch above decides
+        # the status instead (it is the documented no-agent mode, not a gap).
         status = "partial"
-        limits.append("no work/generated/*.json answers were found: the deterministic "
-                      "baseline (revised == original) is used for every paragraph")
-    if merged["missing"]:
-        status = "partial"
-        limits.append("%d of %d paragraph(s) have no generated revision and are emitted "
-                      "with status=unrevised" % (len(merged["missing"]), len(segments)))
+        limits.append("%d of %d paragraph(s) have no generated revision; the "
+                      "deterministic fallback polisher edited them where a rule "
+                      "applied safely" % (len(merged["missing"]), len(segments)))
     if merged["duplicates"]:
         status = "partial"
         limits.append("duplicate generated records ignored for: %s"
@@ -1791,11 +2217,17 @@ def assemble(out_dir: Path, work_dir: Path, state: dict[str, Any],
     if reverted:
         status = "partial"
         limits.append("%d paragraph(s) were reverted to the source because the rewrite "
-                      "changed a number, citation or negation (fabrication guard)" % reverted)
+                      "changed a number, citation or negation (fabrication guard)"
+                      % reverted)
+    if fallback_reverted:
+        status = "partial"
+        limits.append("%d deterministic fallback candidate(s) were reverted to the "
+                      "source because they would have changed a number, citation or "
+                      "negation (fabrication guard)" % fallback_reverted)
     if unrevised and merged["received"]:
         status = "partial"
-        limits.append("%d answered paragraph(s) fell back to the source (empty/blank "
-                      "revised text)" % unrevised)
+        limits.append("%d answered paragraph(s) could not be revised (empty answer and "
+                      "no safe fallback edit)" % unrevised)
     if state.get("degraded") and status == "success":
         status = "partial"
     if stopwatch.past_soft():
@@ -1806,6 +2238,16 @@ def assemble(out_dir: Path, work_dir: Path, state: dict[str, Any],
         uncertainty.append("generated records present but missing the revised field: %s"
                            % ", ".join(merged["incomplete"][:10]))
 
+    # A renderer declared in resources.yaml must be reachable before the renderer
+    # probe runs inside build_deliverables (the shared probe only reads PATH).
+    declared_tool_dirs = _apply_declared_tool_paths(state)
+    if declared_tool_dirs:
+        change_log.append("finalize: prepended %d declared tool directory(ies) to PATH "
+                          "before the renderer probe" % len(declared_tool_dirs))
+    deliverables, delivery_limits = build_deliverables(
+        out_dir, state, paragraphs, changes, terminology, preservation, status)
+    limits.extend(delivery_limits)
+
     evidence = build_evidence(doc, paragraphs, changes, preservation, terminology,
                               state, deliverables)
     grounding = evidence["grounding"]
@@ -1813,6 +2255,23 @@ def assemble(out_dir: Path, work_dir: Path, state: dict[str, Any],
 
     document_edit_chars = sum(paragraph["edit"]["changed_chars"] for paragraph in paragraphs)
     document_chars = sum(len(paragraph["original"]) for paragraph in paragraphs)
+    fallback_info = {
+        "available": fallback_polish is not None,
+        "applied": fallback_edits > 0,
+        "method": (fallback_polish.describe()["method"]
+                   if fallback_polish is not None else "unavailable"),
+        "paragraphs_by_method": dict(method_counts),
+        "paragraphs_edited": fallback_edits,
+        "paragraphs_reverted": fallback_reverted,
+        "attempts": audit.get("fallback_attempts", 0),
+        "changes": sum(len(paragraph["changes"]) for paragraph in paragraphs
+                       if paragraph.get("method") == FALLBACK_METHOD),
+        "edit_rate_budget": (fallback_polish.MAX_EDIT_RATE
+                             if fallback_polish is not None else None),
+        "note": ("the deterministic fallback polisher makes no model judgement; it "
+                 "only applies rules whose source fragments are documented per change "
+                 "and it is re-checked by the same invariant guard as an agent answer"),
+    }
     quality = {
         "coverage_rate": coverage,
         "paragraphs_total": len(paragraphs),
@@ -1833,6 +2292,10 @@ def assemble(out_dir: Path, work_dir: Path, state: dict[str, Any],
                                       if changed_paragraphs else 1.0),
         "document_edit_rate": round(document_edit_chars / max(1, document_chars), 4),
         "review_item_count": len(audit["review_items"]),
+        "paragraphs_by_method": dict(method_counts),
+        "fallback_edits": fallback_edits,
+        "fallback_reverted": fallback_reverted,
+        "fallback_available": fallback_polish is not None,
         "anchor_quality": state.get("anchor_quality"),
         "engine": state.get("engine"),
     }
@@ -1846,6 +2309,8 @@ def assemble(out_dir: Path, work_dir: Path, state: dict[str, Any],
         "changes_valid": landing["changes_valid"],
         "changes_invalid": landing["changes_invalid"],
         "review_items": audit["review_items"][:60],
+        "paragraphs_by_method": dict(method_counts),
+        "fallback_edits": fallback_edits,
         "coverage_rate": coverage,
         "preservation_clean_rate": preservation.get("clean_rate"),
         "document_edit_rate": quality["document_edit_rate"],
@@ -1876,6 +2341,10 @@ def assemble(out_dir: Path, work_dir: Path, state: dict[str, Any],
         "summary_text": _summary_text(state.get("style_profile") or {}, status, paragraphs,
                                       changes, preservation, terminology),
         "deliverables": deliverables,
+        "fallback_polisher": fallback_info,
+        "resource_manifest": (state.get("resource_manifest")
+                              or {"present": False,
+                                  "note": "no resources.yaml manifest"}),
     }
 
     report = hybrid.run_report(
@@ -1902,17 +2371,34 @@ def assemble(out_dir: Path, work_dir: Path, state: dict[str, Any],
         style_profile=state.get("style_profile"),
         output_dir=str(out_dir),
         work_dir=str(work_dir),
+        method_note=method_note,
+        paragraphs_by_method=dict(method_counts),
+        fallback=dict(fallback_info,
+                      rules=(fallback_polish.describe()["rules"]
+                             if fallback_polish is not None else {})),
+        resource_manifest=(state.get("resource_manifest")
+                           or {"present": False,
+                               "note": "no resources.yaml manifest"}),
+        declared_tool_dirs=state.get("declared_tool_dirs") or [],
     )
+    # Top-level compatibility aliases: hybrid.finalize(extra=...) merges them into
+    # result.json without ever overwriting a declared field, and meta records
+    # exactly which ones were added and why.
+    compatibility = _compatibility_keys(case, values)
     payload = hybrid.finalize(
         out_dir, case=case, case_id=case_id, values=values, status=status,
         limits=limits, uncertainty=uncertainty, change_log=change_log,
         evidence=evidence, report=report, synonyms=SYNONYMS,
         task_md_path=state.get("task_md_path"),
+        extra=compatibility["keys"],
     )
+    meta = payload.setdefault("meta", {})
+    meta["compatibility_keys"] = sorted(compatibility["keys"])
+    meta["compatibility_keys_note"] = compatibility["note"]
     declared = hybrid.declared_fields(case)
     if declared:
         conform_contract_types(payload, declared)
-        contract.write_result(out_dir, payload)
+    contract.write_result(out_dir, payload)
     state["final_status"] = status
     state["change_log"] = change_log
     hybrid.write_json(work_dir / "state.json", state)

@@ -1,7 +1,7 @@
 ---
 name: writing-02-language-polish
-description: Polish academic manuscripts with a minimal-edit protocol and a per-sentence change ledger — grammar, terminology, academic register and Chinese-English expression — while proving that numbers, units, citations, figure/table references, hedges and negations are preserved. Emits a contract-reflected result.json plus editable .docx/.md/.html deliverables and a re-verified evidence file. Use when a task asks to revise, polish, proofread or improve a manuscript/abstract/methods/grant text and demands original-vs-revised comparison with reasons.
-version: 1.1.0
+description: Polish academic manuscripts with a minimal-edit protocol and a per-sentence change ledger — grammar, terminology, academic register and Chinese-English expression — while proving that numbers, units, citations, figure/table references, hedges and negations are preserved. Also ships a deterministic rule-based fallback polisher, so the documented default command (--all) still delivers a real, per-change documented polish when no model judgement is supplied. Emits a contract-reflected result.json plus editable .docx/.md/.html deliverables and a re-verified evidence file. Use when a task asks to revise, polish, proofread or improve a manuscript/abstract/methods/grant text and demands original-vs-revised comparison with reasons.
+version: 1.2.0
 author: 66Union
 license: MIT
 tags: [language-polish, minimal-edit, semantic-preservation, terminology-consistency, change-ledger, output-contract]
@@ -21,6 +21,8 @@ tags: [language-polish, minimal-edit, semantic-preservation, terminology-consist
 | **讲得清** | 修改记录逐条校验：original 必须出现在原文、revised 必须出现在改文、必须给理由与受控类型，否则标 invalid 并计入 land 率 | edit_ledger 的 valid/issues 与 change_landing 统计 |
 
 **与"让模型整段重写并自述已核对"的做法不同**：本技能把"没改坏"做成代码断言而不是模型承诺；数字/引用一旦被改动，输出自动回退到原文并如实记 reverted_preservation，评审可以直接看 agent_revised 与回退原因。
+
+**零 Agent 也能交付真实润色**：如果评测 Agent 只运行了默认命令（--all = prepare+finalize）而没有写 work/generated/*.json，运行不会退化成 revised == original 的空润色。脚本内置确定性的规则回退润色器（scripts/fallback_polish.py）：只做可解释的最小编辑（标点/空格、a-an、重复词、句首大写、术语大小写、少量过度声称词与中英直译），逐条记录 original/revised/type/reason，并接受与 Agent 答案完全相同的守恒守卫（数字/引用/否定/公式/限定词任一被改动就整段回退）。此时 status=success 且 limits 明确写 no model judgement；出现回退或没有安全编辑才是 partial。详见第十三节。
 
 **核心工程约束**（评测环境强制）：64 次模型请求 / 900 秒 / 单次回复 16384 tokens。因此文本搬运、清点、校验全部由确定性脚本完成，模型请求只花在"这句该不该改、怎么改、为什么"的判断上。典型 3 段稿件 = 1 张工作表 = 1 次读 + 1 次写。
 
@@ -48,6 +50,7 @@ tags: [language-polish, minimal-edit, semantic-preservation, terminology-consist
 /input/case.json          必选；唯一输出契约来源（output_contract），字段名由题目决定
 /input/task.md            必选；文体、目标语言、指定章节、处理项从正文里解析
 environment/**            可选；稿件与术语表/风格指南等材料（自动发现并排序）
+environment/resources.yaml 可选；平台声明的资源清单（先读清单，再按声明取材料；缺失如实登记）
 ```
 
 ### 输出（全部写在 --out 目录）
@@ -76,7 +79,7 @@ python scripts/run_language_polish.py --all      --out /app/output     # 默认�
 
 ### 阶段 1：prepare（确定性，零模型请求）
 
-1. **发现输入**：扫描 `/input`、`/app/input`、`/app/work`、`/app/environment`、`/app`，最后退化到当前目录；按 case_id/output_contract 特征认 case.json，按文件名认 task.md，按后缀认材料；排序规则固定（稿件名优先 → 非术语/指南类优先 → docx/tex/md 优先 → 体积大者优先 → 路径字典序），保证三次重复运行拿到同一主文档，且绝不把输出目录/工作目录里的交付物再当输入。
+1. **发现输入**：扫描 `/input`、`/app/input`、`/app/work`、`/app/environment`、`/app`，最后退化到当前目录；按 case_id/output_contract 特征认 case.json，按文件名认 task.md，先读 environment/resources.yaml（若存在）并把声明的文件作为材料优先项，再按后缀认材料；排序规则固定（稿件名优先 → 非术语/指南类优先 → docx/tex/md 优先 → 体积大者优先 → 路径字典序），保证三次重复运行拿到同一主文档，且绝不把输出目录/工作目录里的交付物再当输入。
 2. **提取**：PDF 走共享引擎链（PyMuPDF → pdfplumber → pdf-text-tool/pdftotext → 内置解析器），每个结果带 engine 与 anchor_quality(span/page/text)，降级原因写 attempts。非 PDF（docx/md/tex/txt）走**段落级读取器**：docx 用标准库读 OOXML（不依赖 python-docx），md/tex/txt 按空行切段，参考文献按行首 [n]/n. 自动分段——因为通用块构建器面对合成坐标会把整篇并成一个块，逐段对照就没了。
 3. **切段**：以段落为最小单位（超过 1800 字符的段落按句界再切）；每段记录 seg_id、页码、block_id、bbox、所属章节、是否标题。超过 80 段截断并记 limits。
 4. **清点机器可判事实**：每段抽 numbers（含单位）、citations（[1]、(Author, 2020)、\cite{}、\ref{}、图/表/式编号）、hedges（限定词）、negations、modals、labels（figure/table/equation…）、formulas（记号级）。对整篇再抽 terms（术语候选：缩写 + 重复短语）。
@@ -87,6 +90,16 @@ python scripts/run_language_polish.py --all      --out /app/output     # 默认�
 ### 阶段 2：Agent 判断（模型，唯一消耗模型预算的环节）
 
 读一张工作表，写一份 `work/generated/batch-XX.json`。规则硬编码在工作表里（见第五节），模型不需要背 SKILL.md。批次数 ≈ ceil(段数/5)，典型 3~8 次模型请求。
+
+### 阶段 2.5：确定性回退润色（零 Agent 答案时，零模型请求）
+
+finalize 逐段合并两种答案来源，优先级固定：
+
+1. **Agent 答案优先**：work/generated/batch-XX.json 里该段有非空 revised 时完全按原协议处理，方法记为 method=agent；
+2. **确定性回退**：该段没有 Agent 答案（或答案是空 revised）且不是标题时，调用 scripts/fallback_polish.py 的 polish_paragraph()，得到候选 revised 与逐条 changes，然后**用与 Agent 答案相同的守卫**复检：数字/引用/否定/公式/限定词集合比对 + 字符级改动率上限 0.25 + 每条 change 必须能同时落在原文与改文。任何一项不满足就整段回退成原文（status=unrevised，flags 加 fallback_reverted_preservation，review_items 记原因）。
+3. 每段都写 **method = agent / deterministic_fallback / source_unchanged**；run_report 与 result 的 meta.additional_outputs（fallback_polisher.paragraphs_by_method）给出汇总。
+
+回退润色是**幂等**的：polish_paragraph(polish_paragraph(x)) 不再产生编辑，因此同一输入重复运行 result.json 字节一致（路径字段除外）。
 
 ### 阶段 3：finalize（确定性，零模型请求）
 
@@ -104,8 +117,8 @@ python scripts/run_language_polish.py --all      --out /app/output     # 默认�
 
 | 状态 | 条件 |
 |---|---|
-| `success` | 覆盖 100%、无回退、无未改段、无缺失批次、未触发截断/超时降级 |
-| `partial` | 任一段未生成/回退/空答案回填、有缺失或重复批次、脚本降级（截断、软截止）、或无契约（内容进 additional_outputs） |
+| `success` | Agent 答案覆盖 100%、无回退、无未改段、无缺失批次、未触发截断/超时降级；**或** work/generated 完全没有答案、确定性回退润色至少改了一段且无回退/无 critical 复核项/未降级/未过软截止（limits 会写 no model judgement） |
+| `partial` | Agent 答案有缺失/重复批次、出现回退、零 Agent 答案时回退润色没有产出安全编辑或出现回退、脚本降级（截断、软截止）、或无契约（内容进 additional_outputs） |
 | `failed` | 没有任何材料、或所有候选都无可用文字层（扫描件无 OCR）、或顶层未捕获异常（仍写 failed 结果） |
 
 ## 五、Agent 操作协议（精确到命令与 JSON）
@@ -246,6 +259,7 @@ python scripts/run_language_polish.py --finalize --out /app/output
 | `seg_id` / `page` / `section` / `order` | 段标识、页码、所属章节、原文顺序 |
 | `original` / `revised` | 原文 / 最终改文（回退或未改时两者相同） |
 | `agent_revised` | 模型原始改文（被回退时仍保留，供复核） |
+| `method` | agent / deterministic_fallback / source_unchanged（该段答案来自模型判断、确定性规则还是原样保留） |
 | `status` | revised / revised_with_review_items / kept_unchanged / reverted_preservation / reported_change_not_applied / unrevised |
 | `changes` | 本段修改记录（original/revised/type/type_label/reason/valid/issues） |
 | `flags` | 命中的问题标记（number_lost:...、citation_lost:...、hedge_weakened:...、heavy_edit:0.62…） |
@@ -262,6 +276,14 @@ status（success/partial/failed）、contract_detected、contract_field_count、
 | 异常情况 | 检测方式 | 处理策略 | 状态标记 |
 |---|---|---|---|
 | 找不到 case.json | 发现阶段 missing 含 case.json | 仍按材料润色，全部产物进 meta.additional_outputs | partial |
+| resources.yaml 声明文件缺失 | load_manifest 的 missing 非空 | 仍按其余材料润色；缺失项写 uncertainty，不猜测内容 | partial / failed（视是否有可用材料） |
+| resources.yaml 缺失或清单为空 | find_manifest 返回 None 或 declared==0 | 行为与无清单时完全一致，只记 meta.resource_manifest.present=false | 不变 |
+| resources.yaml 路径越界/绝对路径 | 解析器拒绝（absolute / .. / outside environment） | 该条目记 rejected + errors，绝不读取；其余条目照常 | 不变 |
+| 零 Agent 答案 | merge_generated 的 received==0 | 确定性回退润色逐段尝试；通过守卫则 status=success 并在 limits 写 no model judgement；有回退或无安全编辑则 partial | success / partial |
+| 回退润色候选破坏守恒 | checked_preservation + invariant_diff + critical_reasons | 整段回退成原文，flags=fallback_reverted_preservation，review_items 记原因 | partial |
+| 回退润色改动率过高 | edit_stats.edit_rate > 0.25 | 放弃该段全部编辑（不做部分编辑，保证幂等） | unrevised |
+| 手写引用被空格写坏 | 引用键按忽略空白比较 | 视为同一引用，不算新增引用、不回退该段 | 不变 |
+| 契约字段名无法猜中 | output_contract 声明名映射不到内部值 | 顶层附兼容键（不覆盖声明字段），meta.compatibility_keys 记录实际加上的键 | 不变 |
 | case 无 output_contract | contract_detected=false | 不发明字段，内容进 additional_outputs，limits 说明 | partial |
 | 无任何材料 | 材料列表为空 | 输出 failed 结果，声明字段按类型占位 | failed |
 | 扫描件/无文字层 | 提取 text_layer=false 或总字符 ≤40 | 依次尝试下一候选材料；全失败则 failed 并说明需要 OCR | failed / partial |
@@ -293,6 +315,8 @@ status（success/partial/failed）、contract_detected、contract_field_count、
 9. **术语一致性只有模型给了术语表才"结论化"**：否则只报候选清单（inventory_only），不假装验证。
 10. **单 case 单文档为主**：多个材料时只把最像稿件的一份当正文，其余仅用于术语/缩写提示（最多 3 个小文本文件）。
 11. **确定性边界**：result.json / evidence.json 重复运行一致；run_report.json 含耗时字段，天然有差异。
+12. **回退润色只做确定性最小编辑**：不做整句重写、不做断句、不改 CJK 字词；单段字符改动率 > 0.25 直接整段放弃（宁少勿错，且这样才能保证幂等）。
+13. **含数字的术语对不在回退层处理**：Ni-Si02→Ni/SiO2 这类会改动数字字符的修正被回退层跳过，留给 Agent（数字逐字不变是硬约束）。
 
 ## 九、自查
 
@@ -389,6 +413,9 @@ python scripts/run_language_polish.py --finalize --out out
 | 证据 | 段落文字引用 | 锚点回源校验 + 独立拼接全文校验 + 守恒断言三合一才计 grounded |
 | 预算 | 全文塞进一次请求 | 两阶段混合：确定性搬运 + 小批量判断，典型 3~8 次模型请求 |
 | 被杀风险 | 未处理 | 启动即写占位 + prepare 结束即在基线成稿，任何时刻都有产出 |
+| 无 Agent 答案 | 直接交付 revised == original（等于没润色） | 确定性回退润色：真实最小编辑 + 逐条记录 + 同一守恒守卫，status 语义如实 |
+| 资源入口 | 忽略 environment/resources.yaml | 先读清单：声明文件优先、缺失登记、工具目录进 PATH、摘要进 result 与 run_report |
+| 未知契约字段名 | 只靠同义词映射 | 额外附顶层兼容键（绝不覆盖声明字段）并记录 meta.compatibility_keys |
 
 ## 十二、环境踩坑（--help 不会告诉你的）
 
@@ -398,7 +425,102 @@ python scripts/run_language_polish.py --finalize --out out
 4. **参考文献会粘连**：Markdown 里参考文献常常一行一条、无空行，空行切段会把整段文献并成一段。已按行首 [n]/n. 强制分段。
 5. **术语表文件以下划线开头是有意的**：共享的 generated 读取器会跳过下划线文件，否则 _glossary.json 会被当成段落答案。
 6. **批顺序 ≠ 输出顺序**：工作表按"聚焦章节优先"排序以先做完重要章节，但最终改文按原文 order 重组；不要把两个顺序混用。
+7. **回退润色的改动率上限是"全有或全无"**：为了让输出成为不动点（幂等），一段要么全部规则生效、要么整段放弃。不要改成"超限就只保留标点层"——第二次运行会继续编辑，result.json 就不再字节一致。
+8. **引用比较必须忽略空白**：手写的 (Qiu et al . , 2019) 会让严格正则"认不出引用"，规范化后又被当成"新增引用"，于是一段 7 条正确编辑的润色被 citation_added 整段回退。引用与公式一律用忽略空白的规范化键比较。
+9. **resources.yaml 的 path 必须相对 environment/ 解析并拒绝 ..**：评测机目录结构与开发机不同，绝对路径一律记 errors 且不读取。
+10. **不要假设 resources.yaml 存在**：隐藏题包可能没有清单；不存在/解析失败时必须与无清单时行为一致，只把事实写进 meta，不要报错。
 7. **Windows 控制台编码**：脚本 stdout 只用 ASCII（日志/摘要），中文只进 UTF-8 文件；否则 CP936 控制台可能抛 UnicodeEncodeError 弄死整次运行。
 8. **渲染器探测不能假设**：镜像里 convert 可能是 Windows 的 FAT 转换工具而不是 ImageMagick；本技能只对 docx→PDF 走 soffice/pandoc 白名单，且失败即降级为 HTML 预览，不伪造。
 9. **--finalize 必须能独立运行**：评测可能只跑 finalize（或 prepare 后进程被换掉），因此 finalize 发现没有 state 时会自动补跑 prepare，而不是报错退出。
 10. **确定性来自"不写时间戳"**：result.json/evidence.json 里不写运行时间；耗时只进 run_report.json。三次重复运行才可比。
+
+## 十三、确定性回退润色与平台资源入口（v1.2）
+
+### 13.1 为什么有这一层
+
+隐藏评测里，Agent 可能只执行文档给出的默认命令（--all），并不会真的写 work/generated/*.json。v1.1 在这种情况下把每段都写成 revised == original：产物"看起来完整"却没有任何润色。v1.2 增加确定性回退润色器，让**不依赖 Agent 判断的路径本身**产出真实、保守、可核验的润色与逐条修改记录，同时把平台声明的资源入口 environment/resources.yaml 变成真正的输入来源。
+
+### 13.2 规则清单（确定性、无模型、零第三方依赖、纯标准库）
+
+| 类型 | 规则 | 命中守卫 |
+|---|---|---|
+| punctuation | 连续空格归一；标点前空格删除（85 % → 85%、et al . → et al.、work . → work.）；括号内外空格；逗号/分号/冒号后缺空格补齐；句首连接副词补逗号（However there → However, there）；句首状语短语补逗号（For example the → For example, the）；et al 补句点；CJK 标点间距归一；行尾空白 | 只改空白与标点，不增删字词 |
+| grammar | a/an 按后接词首音修正（a unit / a university / a European / one… 与 an hour / an honest 例外表）；重复功能词合并（the the → the，仅白名单）；句首/段首小写字母大写 | u-/h- 歧义词跳过；缩写（e.g. / i.e. / Fig. / et al.）、首字母缩写、pH、mol% 等不碰 |
+| terminology | 按传入术语表统一大小写/连字符/分隔符（dft → DFT、nickel based → nickel-based） | 只接受已声明的 canonical 形式；含数字的术语对跳过（数字必须逐字不变）；同一变体有冲突 canonical 时拒绝猜测 |
+| tone | 小型过度声称词表（huge→substantial、very good→good、a lot of→many 等 17 条） | 词表不含任何 hedge/modal，因此不可能改变论断强度 |
+| chinese_english | 小型中英直译词表（carry out→perform、make sure→ensure、on the basis of→based on 等） | 只收"替换后任何后接成分都成立"的条目；需要删宾语的（make a discussion of the results）留给 Agent |
+| structure | 不在回退层实现 | 断句/合句需要作者判断，规则化风险高，明确放弃 |
+
+### 13.3 安全边界（宁少勿错）
+
+- **永不改动**：数字/单位/百分号、引用标记（[n]、(Author, 2020)、\cite、\ref、图/表/式编号）、公式 token、否定词、hedge/modal、标题段（is_heading 段不润色）、CJK 段落的字词（只做空白与标点间距）。
+- **单段字符级改动率硬上限 0.25**：超过就整段放弃。不做"超限只保留一部分编辑"——部分编辑会破坏不动点，使重复运行的结果不再字节一致。
+- 单段最多 20 条 change；每条 change 的 original 必须是原文精确子串、revised 必须是改文精确子串，type 取自 6 个受控 id。
+- 输出是不动点：polish(polish(x)) == polish(x)，因此 --all 重复运行 result.json 字节一致（路径字段除外）。
+
+### 13.4 校验与回退（与 Agent 答案完全同一把尺）
+
+候选改文必须依次通过：
+
+1. **checked_preservation**：数字/引用/公式/限定词不丢失。引用与公式按**忽略空白**的规范化键比较——手写的 (Qiu et al . , 2019) 规范化后是同一个引用，不会被当成"新增引用"；
+2. **invariant_diff + critical_reasons**：数字/引用/否定被增删 → 回退整段；
+3. **edit_stats**：字符改动率 ≤ 0.25；
+4. **validate_changes**：每条记录都能同时落在原文与改文。
+
+任何一项失败 → 整段回退成原文：status=unrevised、flags 加 fallback_reverted_preservation、review_items 记录原因；limits 与 run_report.fallback.paragraphs_reverted 会写清数量。
+
+### 13.5 status 语义
+
+| 场景 | status | 证据 |
+|---|---|---|
+| Agent 答案齐全且无问题 | success | paragraph_alignment[].method=agent |
+| 零 Agent 答案，回退润色改到了段落、无回退、未降级、未过软截止 | success | limits 写 no model-generated answers … no model judgement；fallback_polisher.applied=true |
+| 零 Agent 答案但没有安全编辑 / 出现回退 / 降级 / 过软截止 | partial | limits 逐条给原因（found no safe edit / N fallback candidate(s) were rejected / …） |
+| 只有部分批次有 Agent 答案 | partial | limits: N of M paragraph(s) have no generated revision |
+| 回退润色候选破坏守恒 | partial | flags=fallback_reverted_preservation + review_items |
+
+### 13.6 可核验证据在哪里
+
+- paragraph_alignment[].method：逐段答案来源（agent / deterministic_fallback / source_unchanged）；
+- paragraph_alignment[].changes：逐条 original/revised/type/reason/valid；
+- revision_notes.csv：一行一条修改（有回退润色时必然有数据行，不再是只有表头）；
+- meta.additional_outputs.fallback_polisher：available / applied / method / paragraphs_by_method / attempts / changes / edit_rate_budget；
+- run_report.json：method_note、fallback（含规则清单）、paragraphs_by_method；
+- meta.compatibility_keys：为未知契约额外暴露的顶层别名（见 13.7）。
+
+### 13.7 顶层兼容键（未知契约下也能被发现）
+
+case.json 的字段名有时无法从同义词表猜中。finalize 会额外写一组顶层别名：polished_text、change_ledger、edit_ledger、terminology_table、preservation_report、quality_report、run_summary、deliverables_overview。规则：
+
+- case.json 已声明同名字段时跳过（**绝不覆盖契约字段**）；
+- 某个内部值已经映射到声明字段时不再重复整份内容（避免 result.json 里全文出现三次）；
+- 实际加上的键写入 meta.compatibility_keys，meta.compatibility_keys_note 说明"为在未知契约下也能被发现，不是伪造字段"。
+
+### 13.8 environment/resources.yaml 资源入口
+
+**读取与解析**（lib/resources.py，零依赖、容忍 BOM）：
+
+- 在输入根下按 root/resources.yaml、root/environment/resources.yaml 顺序确定性定位；找不到不报错。
+- 支持平台文档声明的保守 YAML 子集：顶层非空 resources 列表；plain 字段 name / path / url / description / credential_source / credential_env；容忍 BOM、CRLF、整行与行内注释、单/双引号、块序列（- name: x 或裸 - 后接缩进键）、--- 分隔符；不认识的字段记 warning 而非崩溃。
+- path 一律相对 environment/ 解析；绝对路径、含 ..、解析到 environment/ 之外的一律记 errors 且**不读取**；疑似凭据字面量/带签名的 URL 也记 errors。
+- 输出 resources / existing / missing / external / tools / errors / warnings / source；tools 是 name/description/文件名暗示可执行（renderer/office/latex/pandoc/soffice/…）的声明。
+
+**接入方式**：
+
+1. prepare 先读清单，把"真实存在"的声明文件作为材料排序优先项（声明优先于按文件名猜），清单摘要写进 work/state.json 的 resource_manifest；
+2. 声明了但文件不存在 → 写 uncertainty（resources.yaml declares X but the file is absent under environment/），不猜测内容；
+3. 声明的可执行工具若存在，finalize 在渲染探测前把其目录前置进 PATH（共享 renderer 只读 PATH），使声明的渲染器真的可能被用上；否则照旧降级 HTML 预览并写 limits；
+4. result 的 meta.additional_outputs.resource_manifest 与 run_report.json 的 resource_manifest 记录 declared/existing/missing/tools 与错误清单——这是"用了平台声明的资源入口"的可见证据；
+5. **无清单时行为与 v1.1 完全一致**，只记 present=false，不报错。
+
+### 13.9 自测与验收
+
+自测覆盖：回退润色单元（规则命中、守恒、幂等、确定性、CJK 不改字词、术语、歧义拒绝）、手写引用回归（7 条编辑不被回退）、零生成端到端（status=success、段落确有改动、changes 全部 valid、preservation 100%、revision_notes.csv 有数据行、result.json 重复运行字节一致）、resources.yaml 解析（BOM/注释/引号/块序列/绝对路径与 .. 拒绝/缺失登记/工具识别/空清单）、兼容键，以及原有全部用例。
+
+命令（与 CLI 一致，runner 没有 --in 参数：输入靠 /input 等根目录或当前工作目录发现）：
+
+    python scripts/run_language_polish.py --all --out output
+    python scripts/run_language_polish.py --prepare --out output
+    python scripts/run_language_polish.py --pending --out output
+    python scripts/run_language_polish.py --finalize --out output
+

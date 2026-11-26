@@ -160,6 +160,11 @@ SYNONYMS: dict[str, tuple[str, ...]] = {
     "main_file": ("main_tex", "main_tex_file", "root_file", "master_file",
                   "entry_file", "main_document"),
     "notes": ("agent_notes", "adaptation_notes", "decisions", "notes_summary"),
+    "payload": ("result_payload", "main_result", "structured_result", "result",
+                "output", "outputs", "deliverable"),
+    "summary_text": ("cover_letter", "honest_summary", "run_summary",
+                     "narrative_summary", "executive_summary"),
+    "deliverables": ("output_files", "artifacts", "files"),
 }
 
 # --------------------------------------------------------------------------- #
@@ -3302,6 +3307,45 @@ def cmd_finalize(out_dir: Path, work_dir: Path,
         },
         "notes": notes,
     }
+
+    def _artifact(path: Any) -> dict[str, Any]:
+        if not isinstance(path, str) or not path:
+            return {"path": path, "bytes": 0}
+        item = Path(path)
+        return {"path": path, "bytes": item.stat().st_size if item.is_file() else 0}
+
+    values["deliverables"] = {
+        "source_dir": sources["source_dir"],
+        "pdf": _artifact(compile_report.get("pdf")),
+        "png_preview": _artifact(compile_report.get("png")),
+        "static_report": _artifact(str(static_report) if static_report else None),
+        "fix_log": _artifact(str(fix_report) if fix_report else None),
+        "build_notes": _artifact(str(build_notes) if build_notes else None),
+        "reproducibility": _artifact(str(Path(out_dir) / "reproducibility.json")),
+    }
+    values["payload"] = {key: values[key] for key in (
+        "source_dir", "fixed_sources", "compile_report", "pdf_path", "png_preview",
+        "static_checks", "fixes_applied", "fixes_rejected", "error_locations",
+        "reproducibility", "quality", "template_adaptation") if key in values}
+    values["payload"]["status"] = status
+    values["summary_text"] = (
+        "Compilation %s (%s); %d fix(es) were applied and %d rejected, %d source "
+        "error(s) remain after the fixes (before: %d error / %d warning). "
+        "%d compile diagnostic(s) could be located to file:line. Deliverables: fixed "
+        "source tree, static_report.md, fixes_applied.md, build_notes.md, "
+        "reproducibility.json%s. Status: %s. "
+        "中文：编译%s，应用修复 %d 处、拒绝 %d 处，静态检查剩余错误 %d 个。"
+        % ("succeeded" if compile_report.get("success") else "was not possible in this image"
+           if not compile_report.get("engine_available") else "failed",
+           compile_report.get("engine_used") or "no TeX engine",
+           len(apply_report["applied"]), len(apply_report["rejected"]),
+           after_counts.get("error", 0), before_counts.get("error", 0),
+           before_counts.get("warning", 0), len(diagnostics),
+           ", plus compiled PDF/PNG preview" if compile_report.get("pdf") else "",
+           status,
+           "成功" if compile_report.get("success") else "未成功",
+           len(apply_report["applied"]), len(apply_report["rejected"]),
+           after_counts.get("error", 0)))
     evidence = {
         "inputs": found,
         "project": {

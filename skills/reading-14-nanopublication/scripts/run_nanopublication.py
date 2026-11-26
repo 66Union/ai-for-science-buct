@@ -88,6 +88,11 @@ SYNONYMS: dict[str, tuple[str, ...]] = {
     "page_count": ("pages", "page_total", "n_pages"),
     "keywords": ("key_words", "index_terms"),
     "abstract": ("summary_text", "paper_abstract"),
+    "payload": ("result_payload", "main_result", "structured_result", "result",
+                "output", "outputs", "deliverable"),
+    "summary_text": ("cover_letter", "honest_summary", "run_summary",
+                     "narrative_summary", "executive_summary"),
+    "deliverables": ("output_files", "artifacts", "files"),
 }
 
 
@@ -1876,6 +1881,49 @@ def finalize(args: argparse.Namespace) -> dict[str, Any]:
         "trig": trig_text,
         "jsonld": jsonld,
     }
+    def _artifact(path: Path) -> dict[str, Any]:
+        return {"path": str(path), "bytes": path.stat().st_size if path.is_file() else 0}
+
+    deliverables = {
+        "trig": _artifact(trig_path),
+        "jsonld": _artifact(jsonld_path),
+        "assertions": _artifact(out_dir / "assertions.json"),
+        "sources": _artifact(out_dir / "sources.json"),
+        "rejected_assertions": _artifact(out_dir / "rejected_assertions.json"),
+    }
+    payload_value = {
+        "assertion_count": len(final_assertions),
+        "nanopublication_count": len(nanopubs),
+        "assertions": final_assertions,
+        "nanopublications": nanopubs,
+        "sources": [source_meta],
+        "relation_vocab": vocab.get("relations") or [],
+        "serialization": {key: serialization.get(key) for key in
+                          ("format", "nanopublication_style", "trig_path", "jsonld_path",
+                           "trig_valid", "triple_count", "graph_count",
+                           "stable_id_rule")},
+        "rejected_assertion_count": len(rejected),
+        "rejected_assertions": rejected,
+        "quality": quality,
+        "status": status,
+    }
+    degraded_note = "" if generated_present else (
+        " This is the deterministic baseline: no agent-generated assertions were found, "
+        "so the assertions below were derived from the prepared segments only.")
+    summary_text = (
+        "%d atomic assertion(s) were extracted and bound to the source text; %d "
+        "nanopublication(s) were exported as TriG + JSON-LD (triples %s, graphs %s, "
+        "trig_valid=%s). Evidence binding rate %s; atomicity %s; %d candidate assertion(s) "
+        "were rejected (each with a reason) and %d rest on weak evidence. Source: %s.%s "
+        "Status: %s. 共抽取 %d 条原子断言，导出 %d 个纳米出版物（TriG + JSON-LD），"
+        "证据绑定率 %s，拒绝 %d 条不合规断言。"
+        % (len(final_assertions), len(nanopubs), trig_check.get("triples"),
+           trig_check.get("graphs"), trig_check.get("ok"),
+           grounding.get("grounding_rate"), quality.get("atomicity_rate"),
+           len(rejected), len(weak), source_meta.get("title") or "untitled document",
+           degraded_note, status, len(final_assertions), len(nanopubs),
+           grounding.get("grounding_rate"), len(rejected)))
+
     values: dict[str, Any] = {
         "assertions": final_assertions,
         "nanopublications": nanopubs,
@@ -1897,6 +1945,9 @@ def finalize(args: argparse.Namespace) -> dict[str, Any]:
         "page_count": source_meta.get("page_count") or 0,
         "keywords": source_meta.get("keywords") or [],
         "abstract": source_meta.get("abstract") or "",
+        "payload": payload_value,
+        "summary_text": summary_text,
+        "deliverables": deliverables,
         "summary": {
             "case_id": case_id,
             "source_title": source_meta.get("title"),

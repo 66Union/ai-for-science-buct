@@ -117,7 +117,12 @@ SYNONYMS = {
     "style": ["target_style", "format", "citation_style", "formatting_standard", "style_spec",
               "chosen_style"],
     "summary": ["overview", "abstract", "summary_statistics", "brief", "executive_summary"],
-    "status": ["run_status", "state", "outcome"],
+    "status": ["run_status", "state", "outcome", "overall_status"],
+    "payload": ["result_payload", "main_result", "structured_result", "result",
+                "output", "outputs", "deliverable"],
+    "summary_text": ["cover_letter", "honest_summary", "run_summary",
+                     "narrative_summary", "executive_summary"],
+    "deliverables": ["output_files", "artifacts", "files"],
 }
 ADDITIONAL_KEYS = ["summary", "quality", "changes", "uncertainty", "limits", "style",
                    "citation_map", "duplicates", "duplicate_groups", "merges",
@@ -1525,6 +1530,49 @@ def finalize_core(out_dir: Path, work_dir: Path, stopwatch: "hybrid.Stopwatch",
     }
 
     # ---- contract values ---------------------------------------------------
+    def _artifact(path: Any) -> dict[str, Any]:
+        if not isinstance(path, str) or not path:
+            return {"path": path, "bytes": 0}
+        item = Path(path)
+        return {"path": path, "bytes": item.stat().st_size if item.is_file() else 0}
+
+    deliverables = {key: _artifact(value)
+                    for key, value in (artifacts.get("files") or {}).items()}
+    payload_value = {
+        "revised_text": revised_text,
+        "reference_count": len(formatted),
+        "references": formatted,
+        "citation_map": citation_map,
+        "duplicates": {key: value for key, value in (state.get("duplicates") or {}).items()
+                       if key != "aliases"},
+        "resolution": {"markers_total": marker_total, "markers_resolved": marker_resolved,
+                       "unresolved": unresolved[:40],
+                       "marker_resolution_rate": quality["marker_resolution_rate"]},
+        "consistency": consistency,
+        "style": style_info,
+        "quality": quality,
+        "changes": changes,
+        "status": status,
+    }
+    summary_text = (
+        "%d bibliography entr(ies) were cleaned and formatted in %s style; %d of them are "
+        "cited by the manuscript (%d marker(s), %d resolved, rate %s). %d duplicate "
+        "group(s) were merged, %d entr(ies) still need a manual merge decision, %d "
+        "metadata field problem(s) were found (missing fields are reported, never "
+        "invented). Consistency check: %d passed, %d warning(s), %d failure(s). Claim / "
+        "citation grounding rate %s. Deliverables: revised manuscript (.docx/.md/.html), "
+        "references.md/.bib/.ris, change_log.md. Status: %s. "
+        "共处理 %d 条文献条目（%s 格式），合并重复 %d 组，修复元数据缺失 %d 处，"
+        "引用重排 %d 个标记，一致性失败 %d 项。"
+        % (len(entries), style_info.get("label") or style_info.get("style"),
+           len(plan["entry_order"]), marker_total, marker_resolved,
+           quality["marker_resolution_rate"],
+           quality["duplicates_merged"], quality["duplicates_need_review"],
+           len(issues), consistency.get("passed"), consistency.get("warnings"),
+           consistency.get("failures"), grounding.get("grounding_rate"), status,
+           len(entries), style_info.get("label") or style_info.get("style"),
+           quality["duplicates_merged"], len(issues), marker_resolved,
+           consistency.get("failures")))
     values: dict[str, Any] = {
         "revised_text": revised_text,
         "renumbered_text": revised_text,
@@ -1554,6 +1602,9 @@ def finalize_core(out_dir: Path, work_dir: Path, stopwatch: "hybrid.Stopwatch",
         "uncertainty": uncertainty,
         "limits": limits,
         "style": style_info,
+        "payload": payload_value,
+        "summary_text": summary_text,
+        "deliverables": deliverables,
         "summary": {
             "case_id": case_id,
             "target_style": style_info.get("label"),

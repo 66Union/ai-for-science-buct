@@ -6,6 +6,7 @@
 .pylibs/
 
 # generated / bulky artifacts
+_scratch/
 out/
 task-08/
 tasks/cli_inspect/

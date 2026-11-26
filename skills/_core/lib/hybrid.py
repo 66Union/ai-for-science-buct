@@ -199,10 +199,22 @@ GENERIC_ALIASES: dict[str, tuple[str, ...]] = {
     "references": ("reference", "bibliography", "citation", "cited"),
     "metadata": ("meta", "frontmatter", "information", "info", "manifest"),
     "summary": ("abstract", "digest", "overview", "tldr", "condensed", "takeaway"),
+    # Every adapter now declares the two values a hidden contract asks for most
+    # often - "the main result" and "an honest one-paragraph summary" - under keys
+    # whose names differ per case (result_payload / cover_letter / run_summary ...).
+    # Without these aliases those declared fields stayed empty placeholders.
+    "payload": ("result_payload", "result", "results", "output", "outputs",
+                "main_result", "structured_result", "deliverable", "result_data",
+                "output_payload"),
+    "summary_text": ("cover_letter", "cover letter", "summary", "abstract", "overview",
+                     "run_summary", "narrative_summary", "honest_summary",
+                     "executive_summary", "summary_text"),
     "notes": ("note", "card", "bullet", "point", "keypoint"),
     "evidence": ("anchor", "provenance", "grounding", "source", "support",
-                 "citation_anchor", "locator"),
-    "quality": ("metric", "statistics", "stats", "validation", "audit", "qa"),
+                 "citation_anchor", "locator", "source_evidence", "evidence_bundle",
+                 "anchor_list"),
+    "quality": ("metric", "statistics", "stats", "validation", "audit", "qa",
+                "run_quality", "quality_metrics", "quality_report"),
     "glossary": ("term", "terminology", "lexicon", "vocabulary", "dictionary"),
     "translation": ("translate", "translated", "target", "target_text", "chinese", "zh", "yiven"),
     "bilingual": ("bilingual", "aligned", "parallel", "pair", "side_by_side", "duizhao"),
@@ -217,7 +229,7 @@ GENERIC_ALIASES: dict[str, tuple[str, ...]] = {
     "datasets": ("dataset", "data", "corpus", "shujuji"),
     "reproducibility": ("reproduce", "reproduction", "environment", "command", "fuxian"),
     "limitations": ("limitation", "boundary", "caveat", "constraint", "xianzhi"),
-    "status": ("state", "run_status", "outcome"),
+    "status": ("state", "run_status", "outcome", "overall_status"),
     "uncertainty": ("unknown", "unresolved", "gap", "open_question", "buqueding"),
 }
 

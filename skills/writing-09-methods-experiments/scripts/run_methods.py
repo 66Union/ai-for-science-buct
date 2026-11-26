@@ -2954,6 +2954,38 @@ def build_values(analysis: dict[str, Any], generated_info: dict[str, Any],
         if grounding["grounding_rate"] < 0.6:
             limits.append("grounding_rate is low (" + str(grounding["grounding_rate"]) +
                           "); treat the anchors as line-level only")
+    traced_params = sum(1 for row in params
+                        if row.get("source_path") or row.get("line") or
+                        row.get("trace_status") in {"traced", "matched", "located"})
+    payload_value = {
+        "methods_section": section,
+        "methods_steps": steps,
+        "parameter_table": params,
+        "datasets": datasets,
+        "experimental_settings": settings,
+        "baselines": baselines,
+        "reproducibility_checklist": repro,
+        "traceability": records,
+        "limitations": limitations,
+        "questions": questions,
+        "quality": quality,
+        "status": status,
+    }
+    values["payload"] = payload_value
+    values["summary_text"] = (
+        "%d method step(s) and %d parameter row(s) were assembled; %d of the parameter "
+        "row(s) carry a file:line source, the rest are listed as untraceable instead of "
+        "being given a made-up value. %d dataset(s) and %d baseline(s) were recorded. "
+        "Six-element delivery coverage %s; claim grounding %s/%s (rate %s); %d item(s) "
+        "still need author confirmation. Deterministic baseline used: %s. Status: %s. "
+        "中文：共生成 %d 个方法步骤、%d 行参数（%d 行含 file:line 溯源）、"
+        "%d 个数据集、%d 个基线，待作者确认 %d 条。"
+        % (len(steps), len(params), traced_params, len(datasets), len(baselines),
+           quality.get("delivered_coverage_ratio"), grounding.get("grounded") or 0,
+           grounding.get("claims_total") or 0, grounding.get("grounding_rate"),
+           len(questions), baseline_used, status, len(steps), len(params),
+           traced_params, len(datasets), len(baselines), len(questions)))
+
     for material in analysis["material_summary"]:
         if material["warnings"]:
             uncertainty.extend(str(warning) for warning in material["warnings"][:2])
@@ -3215,6 +3247,11 @@ FIELD_SYNONYMS: dict[str, list[str]] = {
     "questions": ["open_questions", "author_questions", "author_followups",
                   "needs_confirmation", "gaps", "followups", "待确认", "追问清单", "追问"],
     "change_log": ["changes", "edits", "modifications", "revision_log", "修改记录"],
+    "payload": ["result_payload", "main_result", "structured_result", "result",
+                "output", "outputs", "deliverable"],
+    "summary_text": ["cover_letter", "honest_summary", "run_summary",
+                     "narrative_summary", "executive_summary"],
+    "deliverables": ["output_files", "artifacts", "files"],
 }
 
 ADDITIONAL_KEYS = ["methods_section", "methods_steps", "parameter_table", "datasets",
@@ -3335,6 +3372,23 @@ def finalize_stage(ctx: dict[str, Any]) -> dict[str, Any]:
     values = built["values"]
     values["change_log"] = built["change_log"]
     artifacts = write_artifacts(ctx["out_dir"], values, ctx["stopwatch"])
+    editable = artifacts.get("editable") or {}
+    byte_map = editable.get("bytes") or {}
+
+    def _artifact(path: Any, key: str) -> dict[str, Any]:
+        size = byte_map.get(key) if isinstance(byte_map, dict) else None
+        if size is None and isinstance(path, str) and path:
+            item = Path(path)
+            size = item.stat().st_size if item.is_file() else 0
+        return {"path": path, "bytes": size or 0}
+
+    values["deliverables"] = {
+        "docx": _artifact(editable.get("docx"), "docx"),
+        "markdown": _artifact(editable.get("markdown"), "markdown"),
+        "html": _artifact(editable.get("html"), "html"),
+        "parameter_table_csv": _artifact(artifacts.get("parameter_csv"), "parameter_csv"),
+        "author_questions_md": _artifact(artifacts.get("questions_md"), "questions_md"),
+    }
 
     out_dir = Path(ctx["out_dir"])
     evidence = {

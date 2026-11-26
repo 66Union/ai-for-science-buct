@@ -90,13 +90,18 @@ FIELD_SYNONYMS: dict[str, tuple[str, ...]] = {
     "uncertainty": ("uncertainties", "unknowns", "not_reported", "不确定性"),
     "status": ("run_status", "状态"),
     "notes": ("flat_notes", "note_list", "笔记"),
+    "payload": ("result_payload", "main_result", "structured_result", "result",
+                "output", "outputs", "deliverable"),
+    "summary_text": ("cover_letter", "honest_summary", "run_summary",
+                     "narrative_summary", "executive_summary"),
 }
 
 # Internal order is the tie-break order of lib/hybrid.map_fields (stable sort), so
 # the most specific value is offered first.
 VALUE_ORDER = (
     "paper_card", "section_notes", "section_summaries", "key_points", "notes",
-    "limitations", "coverage", "evidence", "quality", "status", "uncertainty",
+    "payload", "summary_text", "limitations", "coverage", "evidence", "quality",
+    "status", "uncertainty",
     "notes_markdown", "research_question", "data", "methods", "findings",
     "conclusions", "outline", "sections", "tables", "formulas", "references",
     "frontmatter", "glossary", "index",
@@ -1603,6 +1608,38 @@ def finalize_run(ctx: dict[str, Any], out_dir: Path, work: Path) -> dict[str, An
     }
     card_flat = {key: (value.get("text") if isinstance(value, dict) else value)
                  for key, value in card["card"].items()}
+    max_points = int(resources["limits"].get("max_key_points", 120))
+    payload_value = {
+        "paper_card": card["card"],
+        "card_report": card["report"],
+        "section_notes": section_notes,
+        "section_summaries": section_summaries,
+        "key_points": key_points[:max_points],
+        "note_count": len(notes),
+        "limitations": limitations,
+        "coverage": coverage,
+        "grounding": {"claims_total": grounding.get("claims_total"),
+                      "grounded": grounding.get("grounded"),
+                      "grounding_rate": grounding.get("grounding_rate")},
+        "notes_source": {"generated": assembled["generated"],
+                         "deterministic_baseline": assembled["baseline"]},
+        "status": status,
+    }
+    summary_text = (
+        f"{card['report']['generated']}/{card['report']['fields_total']} paper-card "
+        f"field(s) were reported with an anchor, {len(notes)} note(s) were produced "
+        f"({assembled['generated']} from agent judgements, {assembled['baseline']} from the "
+        f"deterministic baseline), {len(section_notes)} section note(s) and "
+        f"{len(key_points)} key point(s) were assembled over {len(ctx['sections'])} "
+        f"detected section(s) (section coverage "
+        f"{coverage.get('section_coverage_rate')}). Grounding "
+        f"{grounding.get('grounded')}/{grounding.get('claims_total')} claim(s) "
+        f"(rate {grounding.get('grounding_rate')}). Status: {status}. "
+        f"共生成 {len(notes)} 条带锚点的笔记（其中 {assembled['baseline']} 条为基线降级）、"
+        f"{len(section_notes)} 条章节笔记、{len(key_points)} 个要点，"
+        f"论文卡片字段 {card['report']['generated']}/{card['report']['fields_total']}，"
+        f"引文回源率 {grounding.get('grounding_rate')}。")
+
     values: dict[str, Any] = {
         "paper_card": card["card"],
         "section_notes": section_notes,
@@ -1631,6 +1668,8 @@ def finalize_run(ctx: dict[str, Any], out_dir: Path, work: Path) -> dict[str, An
         "frontmatter": ctx["struct"].get("frontmatter") or {},
         "glossary": glossary,
         "index": index,
+        "payload": payload_value,
+        "summary_text": summary_text,
     }
     ordered_values = {key: values[key] for key in VALUE_ORDER if key in values}
 

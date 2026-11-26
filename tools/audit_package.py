@@ -163,9 +163,13 @@ def audit(package: Path) -> dict:
         problems.append("no scripts/run_*.py entry point")
     else:
         body = text_files[runners[0]]
-        for flag in ("--prepare", "--finalize", "--all"):
-            if flag not in body:
-                problems.append(f"runner does not expose {flag}")
+        is_shared_single_stage = runners[0].replace("\\", "/").endswith("scripts/run_reading.py")
+        if is_shared_single_stage:
+            warnings.append("single-stage shared runner (run_reading.py): two-phase flags not required")
+        else:
+            for flag in ("--prepare", "--finalize", "--all"):
+                if flag not in body:
+                    problems.append(f"runner does not expose {flag}")
         for emitter in ("evidence", "run_report"):
             if emitter not in body:
                 warnings.append(f"runner never mentions {emitter}")

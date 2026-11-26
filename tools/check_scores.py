@@ -150,6 +150,29 @@ def main() -> int:
     }
     SNAPSHOT.write_text(json.dumps({"checked_at": summary["checked_at"], "rows": rows},
                                    ensure_ascii=False, indent=2), encoding="utf-8")
+    # Append one compact history point so the patrol can adapt its own interval to
+    # the observed queue movement (see tools/patrol_interval.py). Keeping this out
+    # of the snapshot avoids rewriting the big per-row file twice.
+    history_path = REPO / "out" / "queue-history.json"
+    history: list = []
+    if history_path.is_file():
+        try:
+            history = json.loads(history_path.read_text(encoding="utf-8"))
+        except Exception:
+            history = []
+    history.append({
+        "checked_at": summary["checked_at"],
+        "queue_min": summary["queue_min"],
+        "queue_max": summary["queue_max"],
+        "still_queued": summary["still_queued"],
+        "scored": summary["scored"],
+        "changed": summary["changed"],
+        "new_score_ids": [row["attempt_id"] for row in new_scores],
+        "evaluation_error_ids": [row["attempt_id"] for row in evaluation_errors],
+        "stage_change_count": len(cleared),
+    })
+    history_path.write_text(json.dumps(history[-400:], ensure_ascii=False, indent=1),
+                            encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=1))
     if ns.raw:
         print("\nper attempt:")

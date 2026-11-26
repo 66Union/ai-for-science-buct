@@ -279,7 +279,25 @@ $py = "C:\Users\86188\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\
 
 ### 13.2 重建/改绑自动巡检
 
-- 改绑已有任务：schedule_edit id=`schedule-e4ffd09a-d2b8-47ed-9982-ee8083615e80`，带 target="this_session" + 新 prompt + 当前 expectedUpdatedAt。
-- 或新建：period `DTSTART;TZID=Asia/Shanghai:<yyyyMMdd>T<HHmm>00` + `RRULE:FREQ=MINUTELY;INTERVAL=30;UNTIL=20261129T160000Z`；target=this_session。
-- 提示词要点：先跑 `tools/check_scores.py`；`changed=false` 只回一行；出分才进入「诊断→一个具体改进→三道门→提交」；evaluation_error 且该题无 pending 时补交；配额 `quota_used≥8` 停；一次只改一题。
+- 当前任务：`schedule-c7369578-7c3a-4f12-9d8e-306934f31ea9`（"评分巡检与出分迭代（18:35 重建）"，本会话）。
+- 重建方式：schedule_create，target=**this_session**，rrule = `DTSTART;TZID=Asia/Shanghai:<下一个时段>` + `RRULE:FREQ=MINUTELY;INTERVAL=<自适应分钟数>;UNTIL=20261129T160000Z`。
+- 改绑/改期：schedule_list 取本任务最新 updatedAt → schedule_edit(id, action="update", rrule=…, expectedUpdatedAt=…)。注意**每次投递都会刷新 updatedAt**，所以必须每轮现取。
 - 新会话的 trace 用 `node tools/dsh2trace.mjs --session session-45b12627-7562-4836-a146-2b7c5ba95d0f --out .tmp/trace-final.jsonl`。
+
+### 13.3 自适应巡检间隔（2026-11-26 20:12 起，用户已确认的原则）
+
+> **原则：巡检间隔不固定，按队列位数（最前位 queue_min）与历史推进速率动态调整；越靠近队首越密，越远越疏。**
+
+- `tools/check_scores.py` 每轮把一条记录追加到 `out/queue-history.json`（checked_at / queue_min / queue_max / still_queued / scored / changed / 本轮新分数与失败 id）。
+- `tools/patrol_interval.py` 读该历史，输出 JSON：`queue_min / rate_per_hour / eta_hours / recommended_interval_min / next_dtstart_local / rrule / reason`。
+  分级规则（interval = min(位置档, ETA 档)，再夹到 10–180 分钟）：
+  - 位置档：queue_min ≤300 → 10；≤800 → 20；≤1500 → 30；≤2500 → 45；≤3500 → 60；>3500 → 90 分钟。
+  - ETA 档：queue_min / 观测推进速率（positions/hour）：≤0.5h → 10；≤1h → 20；≤2h → 30；≤4h → 60；≤8h → 90；>8h → 120 分钟。
+  - 紧急：只要有 attempt 的 stage 不是 queued（已被 worker 领取/评测中），直接 10 分钟。
+  - 出现 new_scores / evaluation_errors 的下一轮，覆盖为 15–20 分钟（尽快看后续结果）。
+- 巡检任务每轮按上述脚本输出的 rrule 调用 schedule_edit 自我重排下一次；`schedule_conflict` 就重新 schedule_list 再试一次。
+- 手动查询建议：
+  ```powershell
+  & $py tools/check_scores.py; & $py tools/patrol_interval.py
+  ```
+- 例：2026-11-26 20:11 时 queue_min=2316、35 条在队 → 位置档 45 分钟 → 下次 21:00（21:05 起若 ETA 可算会再自动调整）。

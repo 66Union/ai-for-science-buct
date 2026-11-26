@@ -62,6 +62,10 @@ DEFAULT_SCHEMA: dict[str, Any] = {
         "is_a": {"direction": "directed", "definition": "source is a kind of target"},
         "compares_with": {"direction": "undirected", "definition": "source and target are compared"},
         "part_of": {"direction": "directed", "definition": "source is part of target"},
+        "contains": {"direction": "directed",
+                     "definition": "source is composed of / contains target"},
+        "reports_metric": {"direction": "directed",
+                           "definition": "source reports a measured value for target metric"},
         "co_occurs": {"direction": "undirected",
                       "definition": "deterministic fallback: same paragraph, relation NOT asserted"},
         "other": {"direction": "unspecified", "definition": "real relation whose type is not in the schema"},
@@ -85,14 +89,21 @@ DEFAULT_SCHEMA: dict[str, Any] = {
         "improve": "improves", "enhances": "improves", "increases": "improves",
         "reduces": "improves", "is_a": "is_a", "is_a_kind_of": "is_a",
         "part_of": "part_of", "co_occurrence": "co_occurs", "cooccurs": "co_occurs",
+        "contains": "contains", "composed_of": "contains", "consists_of": "contains",
+        "comprised_of": "contains", "alternative_to": "compares_with",
+        "reports": "reports_metric", "measured": "reports_metric",
+        "achieves": "reports_metric", "reaches": "reports_metric",
     },
     "merge_rules": {
         "same_surface": "identical normalised surface (case/hyphen/space insensitive)",
         "acronym_definition": "acronym and full form defined in the material itself",
         "agent_alias": "alias declared by the agent in nodes.json",
         "never_merge": "different declared types are a homonym: kept separate, logged",
+        "surface_variant": ("the surface differs only by a trailing generic head noun "
+                            "(catalyst / reaction / sample / method); merged, logged"),
     },
-    "strength_levels": {"strong": 0.9, "moderate": 0.6, "weak": 0.35},
+    "strength_levels": {"strong": 0.9, "moderate": 0.6, "weak": 0.35,
+                        "co_occurrence": 0.2},
 }
 
 TYPE_ORDER = ("researcher", "material", "method", "task", "dataset", "metric",
@@ -164,17 +175,48 @@ ELEMENT_SYMBOLS = {
 }
 CHEM_RE = re.compile(
     r"(?<![A-Za-z0-9])(?:[A-Z][a-z]?\d{0,3}){2,}(?:[-/](?:[A-Z][a-z]?\d{0,3})+)?(?![a-z])")
+# A multi-element formula that contains a separator must keep ALL element units in
+# its tail: an earlier version stopped after the first unit and turned "Ni/SiO2"
+# into "Ni/Si", which is a material that the paper never names.
 FORMULA_TAIL_RE = re.compile(
-    r"(?<![A-Za-z0-9])(?:[A-Z][a-z]?\d{0,2}[-/])+[A-Z][a-z]?\d{0,3}(?![a-z])")
+    r"(?<![A-Za-z0-9])(?:[A-Z][a-z]?\d{0,2}[-/])+(?:[A-Z][a-z]?\d{0,3})+(?![a-z])")
 CAP_PHRASE_RE = re.compile(r"[A-Z][A-Za-z0-9\-]*(?:\s+[A-Z][A-Za-z0-9\-]*){1,3}")
 ET_AL_RE = re.compile(r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\s+et\s+al\.")
-ACRONYM_DEF_RES = (
-    re.compile(r"([A-Z][A-Za-z0-9 /\-]{3,60}?)\s*\(([A-Z][A-Za-z0-9\-]{1,10})\)"),
-    re.compile(r"\b([A-Z][A-Za-z0-9\-]{1,10})\s*\(([A-Za-z][A-Za-z0-9 /\-]{3,60})\)"),
-)
+# Acronym definitions stated by the material itself. Two orders are common
+# ("X-ray diffraction (XRD)" and "XRD (X-ray diffraction)") and Chinese papers use
+# a full-width bracket. The expansion is re-derived from the acronym so that a
+# parenthetical that is not really a definition ("(Fig. 2)") is rejected.
+EXPANSION_ACRONYM_RE = re.compile(
+    r"(?P<expansion>[A-Za-z][A-Za-z0-9 ,./\-]{2,70}?)\s*\(\s*"
+    r"(?P<acronym>[A-Z][A-Z0-9\-]{1,9})\s*\)")
+ACRONYM_EXPANSION_RE = re.compile(
+    r"\b(?P<acronym>[A-Z][A-Z0-9\-]{1,9})\s*\(\s*"
+    r"(?P<expansion>[A-Za-z][A-Za-z0-9 ,./\-]{2,70}?)\s*\)")
+CJK_ACRONYM_RE = re.compile(
+    r"(?P<expansion>[\u4e00-\u9fff]{2,20})\s*[\uff08(]\s*"
+    r"(?P<acronym>[A-Z][A-Z0-9\-]{1,9})\s*[\uff09)]")
+# Words that may sit between the acronym letters without owning a letter of it.
+ACRONYM_STOPWORDS = frozenset({
+    "of", "and", "the", "for", "with", "in", "on", "to", "a", "an", "by", "using",
+    "via", "based", "from", "at", "as", "into", "over", "under",
+})
+# Generic head nouns that do not change WHICH object a surface names:
+# "Ni/SiO2 catalyst" and "Ni/SiO2" are the same material, "CO2 methanation" and
+# "CO2 methanation reaction" are the same task. Stripping them is a merge
+# rule, and every merge it causes is logged with its basis.
+SURFACE_VARIANT_HEADS = frozenset({
+    "catalyst", "catalysts", "sample", "samples", "material", "materials",
+    "method", "methods", "reaction", "reactions", "process", "processes",
+    "system", "systems", "nanoparticle", "nanoparticles", "support", "supports",
+    "species", "compound", "compounds", "phase", "phases", "route", "routes",
+})
+# A number+unit run that is a real condition. The lookbehind rejects digits that
+# belong to a chemical formula ("CO2 m" is not "2 molar"), and the lookahead
+# rejects a unit that is really the start of a word.
 CONDITION_VALUE_RE = re.compile(
-    r"(?:-?\d+(?:\.\d+)?\s*(?:%|°C|K|h|min|s|mL|mg|g|mol|bar|MPa|V|mA|"
-    r"mg/mL|mol/L|M|nm|eV|Hz|rpm))", re.I)
+    r"(?<![A-Za-z0-9])(?:-?\d+(?:\.\d+)?)\s*"
+    r"(?:wt%|mol/L|mg/mL|%|°C|℃|bar|MPa|kPa|atm|min|mL|mg|nm|um|μm|eV|Hz|rpm|"
+    r"K|C|h|s|g|V|mA|M)(?![A-Za-z])", re.I)
 
 
 # --------------------------------------------------------------------------- #
@@ -190,6 +232,50 @@ def norm_label(text: str) -> str:
 def norm_key(text: str) -> str:
     """Aggressive key for entity-alignment decisions (all separators removed)."""
     return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", norm_label(text))
+
+
+def variant_key(label: str) -> str:
+    """Key that ignores a trailing generic head noun ("catalyst", "reaction").
+
+    "Ni/SiO2 catalyst" and "Ni/SiO2" name the same material; "CO2 methanation"
+    and "CO2 methanation reaction" name the same task. Only the trailing head
+    is dropped, so "CH4" and "CH4 selectivity" never collapse.
+    """
+    tokens = norm_label(label).split(" ")
+    tokens = [token for token in tokens if token]
+    trimmed = list(tokens)
+    while len(trimmed) > 1 and trimmed[-1] in SURFACE_VARIANT_HEADS:
+        trimmed.pop()
+    if trimmed == tokens:
+        return ""
+    key = "".join(trimmed)
+    return key if len(key) >= 3 else ""
+
+
+def _token_letters(token: str) -> str:
+    """Initial letters of one word, splitting hyphens: X-ray -> XR."""
+    return "".join(part[0] for part in re.split(r"[-\u2010-\u2015/]", token) if part)
+
+
+def derive_expansion(acronym: str, raw: str) -> str | None:
+    """Recover the full form that actually generates this acronym.
+
+    Returns the shortest suffix whose initials equal the acronym, so
+    "Samples were characterized by X-ray diffraction (XRD)" yields
+    "X-ray diffraction" rather than the whole clause.
+    """
+    acr = re.sub(r"[^A-Z0-9]", "", (acronym or "").upper())
+    if not (2 <= len(acr) <= 10):
+        return None
+    tokens = re.findall(r"[A-Za-z][A-Za-z0-9\-]*|[\u4e00-\u9fff]+", raw or "")
+    if len(tokens) < 2:
+        return None
+    for size in range(2, min(8, len(tokens)) + 1):
+        candidate = tokens[-size:]
+        initials = "".join(_token_letters(token) for token in candidate).upper()
+        if initials == acr:
+            return " ".join(candidate)
+    return None
 
 
 def clip(text: str, limit: int = 240) -> str:
@@ -800,6 +886,80 @@ RELATION_TRIGGERS: list[tuple[str, re.Pattern[str]]] = [
 METHOD_SUFFIX_RE = re.compile(r"(?:tion|sion|sis|ing|graphy|scopy|lysis|metry|ization|ation)$", re.I)
 CHEM_FULL_RE = re.compile(r"(?:[A-Z][a-z]?\d{0,3})(?:[-/](?:[A-Z][a-z]?\d{0,3})+)+")
 
+UNDIRECTED_RELATIONS = {"compares_with", "co_occurrs", "co_occurs"}
+
+# Syntactic relation patterns. The DIRECTION is read off the sentence: the
+# subject is the entity next to the trigger on the left, the object the entity
+# on the right (swapped when the clause is passive). A trigger alone is never
+# enough: if both endpoints are not in the same sentence no edge is emitted.
+# ("more specific pattern first", then a stable sort keeps output deterministic.)
+DIRECTED_PATTERNS: list[tuple[str, re.Pattern[str], bool, str]] = [
+    ("outperforms", re.compile(r"\b(?:outperform\w*|surpass\w*|exceed\w*)\b", re.I),
+     False, "comparative_verb"),
+    ("outperforms", re.compile(
+        r"\b(?:better|higher|greater|superior|larger|faster|stronger|lower)\b[^.;]{0,40}?\bthan\b",
+        re.I), False, "comparative_than"),
+    ("contradicts", re.compile(r"\b(?:contradict\w*|inconsistent with|conflict\w* with|"
+                               r"contrary to|disagree\w* with)\b", re.I),
+     False, "contradiction_verb"),
+    ("supports", re.compile(r"\b(?:support\w*|confirm\w*|corroborat\w*|consistent with|"
+                            r"in line with|agrees? with|provide evidence)\b", re.I),
+     False, "support_verb"),
+    ("compares_with", re.compile(r"\b(?:alternative to|compared (?:with|to)|"
+                                 r"comparison (?:with|to)|versus|vs\.?)\b", re.I),
+     False, "comparison"),
+    ("characterizes", re.compile(
+        r"\b(?:was|were|is|are|been)\s+(?:characteri[sz]ed|analy[sz]ed|measured|determined|"
+        r"obtained|detected|identified|monitored|examined)\s+(?:by|with|using)\b", re.I),
+     True, "passive_method_characterizes_material"),
+    ("characterizes", re.compile(r"\b(?:characteri[sz]\w*|analy[sz]\w*)\s+(?:by|with|using)\b",
+                                 re.I), False, "method_characterizes_material"),
+    ("evaluates_on", re.compile(
+        r"\b(?:was|were|is|are|been)\s+(?:tested|evaluated|assessed|screened|benchmarked|"
+        r"measured)\s+(?:at|on|under|with|against|using)\b", re.I),
+     False, "passive_evaluation_condition"),
+    ("evaluates_on", re.compile(r"\b(?:tested|evaluated|assessed|screened|benchmarked)\s+"
+                                r"(?:at|on|under|against|using|for)\b", re.I),
+     False, "evaluation_condition"),
+    ("uses", re.compile(
+        r"\b(?:was|were|is|are|been)\s+(?:prepared|synthesi[sz]ed|produced|fabricated|made|"
+        r"deposited|grown)\s+(?:by|via|using|with)\b", re.I),
+     False, "passive_synthesis_uses_method"),
+    ("uses", re.compile(r"\b(?:prepared|synthesi[sz]ed|produced|fabricated|deposited)\s+"
+                        r"(?:by|via|using|with)\b", re.I),
+     False, "synthesis_uses_method"),
+    ("contains", re.compile(r"\b(?:composed of|consists? of|consisting of|contains?|"
+                            r"comprises?|comprising)\b", re.I),
+     False, "composition"),
+    ("causes", re.compile(r"\b(?:leads? to|causes?|caused by|results? in|resulted in)\b", re.I),
+     False, "causal"),
+    ("improves", re.compile(r"\b(?:improv\w*|enhanc\w*|increas\w*|reduc\w*|promot\w*|"
+                            r"boost\w*)\b", re.I),
+     False, "change_verb"),
+    ("characterizes", re.compile(r"\b(?:us(?:e|es|ed|ing)|employ\w*|appl(?:y|ies|ied|ying))\s+"
+                                 r"to\s+characteri[sz]e\b", re.I),
+     False, "used_to_characterize"),
+    ("uses", re.compile(r"\b(?:us(?:e|es|ed|ing)|employ\w*|appl(?:y|ies|ied|ying)|utiliz\w*)\s+"
+                        r"(?:to|for|as|in)\b", re.I),
+     False, "use_verb"),
+    ("uses", re.compile(r"\b(?:based on|via|by means of)\b", re.I), False, "method_instrument"),
+    ("reports_metric", re.compile(r"\b(?:reaches?|reaching|achieves?|achieving|attains?|"
+                                  r"exhibits?|exhibiting)\b", re.I),
+     False, "measured_value"),
+    ("is_a", re.compile(r"\b(?:refers? to|defined as|known as|is (?:a|an) (?:kind|type|class|"
+                        r"form|member|family) of)\b", re.I),
+     False, "definition_verb"),
+]
+
+
+def _match_trigger(text: str) -> tuple[str, str] | None:
+    """First syntactic trigger in a text (kept for the graph adapter/tests)."""
+    for relation, pattern, _swap, _note in DIRECTED_PATTERNS:
+        match = pattern.search(text or "")
+        if match:
+            return relation, match.group(0).strip()
+    return None
+
 
 def _doc_text(doc: dict[str, Any]) -> str:
     return "\n".join(block["text"] for page in doc.get("blocks", {}).values()
@@ -928,6 +1088,72 @@ def _candidate_occurrences(label: str, docs: list[dict[str, Any]],
     return found
 
 
+FORMULA_PREFIX_RE = re.compile(r"(?:[A-Z][a-z]?\d{0,3}[-/])+$")
+PREFERRED_SOURCE_TYPES: dict[str, set[str]] = {
+    "reports_metric": {"material"},
+    "evaluates_on": {"material", "method"},
+    "outperforms": {"material", "method"},
+    "characterizes": {"method"},
+    "uses": {"material", "method"},
+    "contains": {"material"},
+}
+
+
+def repair_material_surface(label: str, global_text: str) -> str | None:
+    """Recover the full sample name when term mining cut off the metal prefix.
+
+    "SiO2 catalyst" is a partial surface of "Ni/SiO2 catalyst": the paper never
+    names a bare SiO2 catalyst. When EVERY occurrence of the label is preceded by
+    the same element prefix the full surface is returned instead.
+    """
+    prefix_re = FORMULA_PREFIX_RE
+    found: set[str] = set()
+    for match in re.finditer(r"(?<![A-Za-z0-9])" + re.escape(label), global_text, flags=re.I):
+        before = global_text[max(0, match.start() - 26):match.start()]
+        prefix = prefix_re.search(before)
+        if prefix:
+            found.add(prefix.group(0) + label)
+    if len(found) == 1:
+        return found.pop()
+    return None
+
+
+def _suppress_contained_entities(candidates: list[dict[str, Any]], global_text: str
+                                 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Drop a bare word when EVERY occurrence of it sits inside a longer candidate.
+
+    "diffraction" disappears once "X-ray diffraction" is a candidate, while
+    "CO2" survives because it also occurs on its own.
+    """
+    kept: list[dict[str, Any]] = []
+    suppressed: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if candidate.get("is_conclusion"):
+            kept.append(candidate)
+            continue
+        label = candidate["label"]
+        folded = label.casefold()
+        total = _count_occurrences(global_text, label)
+        contained = 0
+        longer: list[str] = []
+        for other in candidates:
+            if other is candidate or other.get("is_conclusion"):
+                continue
+            other_label = other["label"]
+            if len(other_label) <= len(label) or folded not in other_label.casefold():
+                continue
+            longer.append(other_label)
+            contained += _count_occurrences(global_text, other_label)
+        if total and longer and contained >= total:
+            suppressed.append({"label": label,
+                               "superseded_by": sorted(longer)[:3],
+                               "reason": "every occurrence of this surface is inside a longer "
+                                         "entity surface that is already a node"})
+            continue
+        kept.append(candidate)
+    return kept, suppressed
+
+
 def collect_candidates(docs: list[dict[str, Any]], segments: list[dict[str, Any]],
                        *, top_terms: int = 60, limit: int = 120) -> dict[str, Any]:
     """Inventory of candidate entities + acronym definitions + conclusions."""
@@ -989,6 +1215,16 @@ def collect_candidates(docs: list[dict[str, Any]], segments: list[dict[str, Any]
             add(author, "author_metadata", "researcher", 1)
         for match in ET_AL_RE.finditer(doc_texts[doc["doc_id"]]):
             add(match.group(1) + " et al.", "author_mention", "researcher", 1)
+    # The full form of a self-defined acronym is an entity too: without it the
+    # alias merge has nothing to merge "XRD" WITH.
+    acronym_data = collect_acronym_definitions(docs, segments)
+    for definition in acronym_data["definitions"]:
+        expansion = definition["expansion"]
+        add(expansion, "acronym_expansion", guess_type(expansion),
+            _count_occurrences(global_text, expansion))
+        acronym = definition["acronym"]
+        add(acronym, "acronym", guess_type(acronym),
+            _count_occurrences(global_text, acronym))
 
     candidates: list[dict[str, Any]] = []
     for entry in raw.values():
@@ -1014,10 +1250,36 @@ def collect_candidates(docs: list[dict[str, Any]], segments: list[dict[str, Any]
     # entities first, conclusions last: a reviewer wants the graph readable
     candidates = [c for c in candidates if c["type"] != "conclusion"][:limit] + \
                  [c for c in candidates if c["type"] == "conclusion"][:16]
+    # Recover full sample surfaces ("Ni/SiO2 catalyst" instead of "SiO2 catalyst")
+    repaired: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if not candidate.get("is_conclusion"):
+            full = repair_material_surface(candidate["label"], global_text)
+            if full and full != candidate["label"]:
+                candidate["label"] = full
+                candidate["signals"] = list(candidate["signals"]) + ["surface_repaired"]
+                candidate["occurrences"] = _candidate_occurrences(full, docs, segments)
+                candidate["count"] = _count_occurrences(global_text, full)
+                candidate["doc_ids"] = sorted({a.get("doc_id") for a in candidate["occurrences"]
+                                               if a.get("doc_id")})
+        repaired.append(candidate)
+    # two surfaces can now name the same object: keep one, max count wins
+    deduped: dict[str, dict[str, Any]] = {}
+    for candidate in repaired:
+        key = norm_key(candidate["label"])
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = candidate
+        elif candidate["count"] > existing["count"]:
+            deduped[key] = candidate
+    candidates = list(deduped.values())
+    candidates, suppressed = _suppress_contained_entities(candidates, global_text)
     for index, candidate in enumerate(candidates, start=1):
         candidate["candidate_id"] = f"c-{index:04d}"
-    acronym_defs = collect_acronym_definitions(docs, segments)
-    return {"candidates": candidates, "acronym_definitions": acronym_defs}
+    return {"candidates": candidates,
+            "suppressed_candidates": suppressed,
+            "acronym_definitions": acronym_data["definitions"],
+            "acronym_conflicts": acronym_data["conflicts"]}
 
 
 def _conclusion_candidates(docs: list[dict[str, Any]],
@@ -1051,83 +1313,279 @@ def _conclusion_candidates(docs: list[dict[str, Any]],
 
 
 def collect_acronym_definitions(docs: list[dict[str, Any]],
-                                segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Acronym <-> full form definitions that the material states itself."""
+                                segments: list[dict[str, Any]]) -> dict[str, Any]:
+    """Acronym <-> full form definitions that the material states itself.
+
+    Only pairs whose initials really spell the acronym are kept, so
+    "(Fig. 2)" or "(2020)" never becomes an alias. When the corpus defines the
+    same acronym differently in two places the first definition is used and the
+    disagreement is returned as a conflict instead of being merged silently.
+    """
     docs_by = documents_by_id(docs)
-    out: list[dict[str, Any]] = []
+    raw: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for seg in segments:
         doc = docs_by.get(seg.get("doc_id") or "")
         if not doc:
             continue
         text = seg.get("text") or ""
-        for pattern in ACRONYM_DEF_RES:
+        if "(" not in text and "\uff08" not in text:
+            continue
+        pairs: list[tuple[str, str, str]] = []
+        for pattern in (EXPANSION_ACRONYM_RE, ACRONYM_EXPANSION_RE):
             for match in pattern.finditer(text):
-                first, second = match.group(1).strip(), match.group(2).strip()
-                for acronym, expansion in ((second, first), (first, second)):
-                    if not (2 <= len(acronym) <= 10 and acronym.isupper()):
-                        continue
-                    words = re.findall(r"[A-Za-z][A-Za-z0-9\-]+", expansion)
-                    if len(words) < 2:
-                        continue
-                    initials = "".join(word[0] for word in words).upper()
-                    if not initials.startswith(acronym):
-                        continue
-                    key = (norm_key(acronym), norm_key(expansion))
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    out.append({
-                        "acronym": acronym,
-                        "expansion": expansion,
-                        "doc_id": doc["doc_id"],
-                        "quote": clip(match.group(0), 200),
-                        "anchor": public_anchor(seg_anchor(doc, seg, clip(text, 200))),
-                    })
-    return out
+                acronym = match.group("acronym").strip()
+                expansion = derive_expansion(acronym, match.group("expansion"))
+                if expansion:
+                    pairs.append((acronym, expansion, match.group(0)))
+        for match in CJK_ACRONYM_RE.finditer(text):
+            acronym = match.group("acronym").strip()
+            expansion = match.group("expansion").strip()
+            if 2 <= len(expansion) <= 30:
+                pairs.append((acronym, expansion, match.group(0)))
+        for acronym, expansion, surface in pairs:
+            if acronym.casefold() in {"fig", "figs", "table", "tab", "eq", "section",
+                                      "supp", "ref", "no", "vol"}:
+                continue
+            if norm_key(acronym) == norm_key(expansion):
+                continue
+            key = (norm_key(acronym), norm_key(expansion))
+            if key in seen:
+                continue
+            seen.add(key)
+            raw.append({
+                "acronym": acronym,
+                "expansion": expansion,
+                "doc_id": doc["doc_id"],
+                "seg_id": seg.get("seg_id"),
+                "paragraph_id": seg.get("paragraph_id"),
+                "quote": clip(surface, 200),
+                "surface": surface,
+                "anchor": seg_anchor(doc, seg, clip(text, 200)),
+                "basis": ("definition pattern 'Full Name (ABC)' stated in the material; "
+                          "initials of the full form spell the acronym"),
+            })
+    # one expansion per acronym: first definition wins, the rest are conflicts
+    by_acronym: dict[str, list[dict[str, Any]]] = {}
+    for item in raw:
+        by_acronym.setdefault(norm_key(item["acronym"]), []).append(item)
+    definitions: list[dict[str, Any]] = []
+    conflicts: list[dict[str, Any]] = []
+    for key in sorted(by_acronym):
+        group = by_acronym[key]
+        primary = group[0]
+        expansions = sorted({norm_key(item["expansion"]) for item in group})
+        entry = dict(primary)
+        entry["doc_ids"] = sorted({item["doc_id"] for item in group})
+        entry["occurrence_count"] = len(group)
+        entry["anchor"] = public_anchor(primary["anchor"])
+        entry["definition_count"] = len(expansions)
+        definitions.append(entry)
+        if len(expansions) > 1:
+            conflicts.append({
+                "kind": "acronym_definition_conflict",
+                "labels": sorted({item["acronym"] for item in group} |
+                                 {item["expansion"] for item in group}),
+                "doc_ids": sorted({item["doc_id"] for item in group}),
+                "candidates": sorted({item["expansion"] for item in group}),
+                "detail": ("the material defines the same acronym with different full forms; "
+                           "only the first definition is used for alignment and the others "
+                           "are kept separate"),
+                "resolution": "kept_first_definition",
+            })
+    return {"definitions": definitions, "conflicts": conflicts}
+
+
+# Which endpoint types a relation may connect. This is what stops "XRD confirms
+# Ni nanoparticles" from becoming "XRD supports nanoparticles": a support claim
+# must point at a claim-like object.
+RELATION_ENDPOINT_TYPES: dict[str, tuple[set[str] | None, set[str] | None]] = {
+    "outperforms": ({"material", "method", "concept", "task"},
+                    {"material", "method", "concept", "task"}),
+    "characterizes": ({"method"}, {"material", "task", "dataset", "concept"}),
+    "evaluates_on": ({"material", "method"}, {"task", "concept", "metric", "material"}),
+    "contains": ({"material", "method"}, {"material", "concept", "method"}),
+    "supports": (None, {"conclusion", "concept", "task", "metric"}),
+    "contradicts": (None, {"conclusion", "concept", "task", "metric"}),
+    "uses": ({"material", "method", "task", "concept"},
+             {"method", "material", "task", "concept"}),
+    "improves": ({"material", "method", "metric"}, {"metric", "material", "concept"}),
+    "causes": ({"material", "method", "metric", "concept"},
+               {"metric", "material", "method", "concept", "task"}),
+    "is_a": (None, {"material", "method", "task", "concept", "dataset"}),
+    "reports_metric": ({"material", "method", "task", "concept"}, {"metric"}),
+    "compares_with": (None, None),
+}
+
+
+def _endpoint_types_ok(relation: str, source_type: str, target_type: str) -> bool:
+    spec = RELATION_ENDPOINT_TYPES.get(relation)
+    if not spec:
+        return True
+    allowed_source, allowed_target = spec
+    if allowed_source is not None and source_type not in allowed_source \
+            and source_type not in {"other", "concept"}:
+        return False
+    if allowed_target is not None and target_type not in allowed_target \
+            and target_type not in {"other", "concept"}:
+        return False
+    return True
+
+
+def _sentence_mentions(sentence: str, labels: list[tuple[str, str, bool]]
+                      ) -> list[dict[str, Any]]:
+    """Entity mentions in one sentence with their character span."""
+    out: list[dict[str, Any]] = []
+    lowered = sentence.casefold()
+    for label, label_type, is_conclusion in labels:
+        if is_conclusion or not label:
+            continue
+        needle = label.casefold()
+        start = 0
+        while True:
+            pos = lowered.find(needle, start)
+            if pos < 0:
+                break
+            start = pos + max(1, len(needle))
+            end = pos + len(needle)
+            before = sentence[pos - 1] if pos else ""
+            after = sentence[end] if end < len(sentence) else ""
+            if re.match(r"[A-Za-z0-9]", label[:1] or "") and (
+                    (before and re.match(r"[A-Za-z0-9]", before))
+                    or (after and re.match(r"[A-Za-z0-9]", after))):
+                continue  # "TEM" must not match inside "SYSTEM"
+            out.append({"start": pos, "end": end, "label": label, "type": label_type})
+    out.sort(key=lambda item: (item["start"], -(item["end"] - item["start"]), item["label"]))
+    filtered: list[dict[str, Any]] = []
+    for item in out:
+        if filtered and item["start"] < filtered[-1]["end"]:
+            continue  # keep the longest mention, drop nested shorter ones
+        filtered.append(item)
+    return filtered
+
+
+def _nearest_mention(mentions: list[dict[str, Any]], position: int, *, side: str,
+                     window: int = 200) -> dict[str, Any] | None:
+    if side == "left":
+        candidates = [item for item in mentions if item["end"] <= position
+                      and position - item["end"] <= window]
+        return candidates[-1] if candidates else None
+    candidates = [item for item in mentions if item["start"] >= position
+                  and item["start"] - position <= window]
+    return candidates[0] if candidates else None
+
+
+def _sentence_relations(sentence: str, mentions: list[dict[str, Any]]
+                        ) -> list[dict[str, Any]]:
+    """Directed relations whose direction comes from where the trigger sits.
+
+    "The Co/TiO2 catalyst shows higher CH4 selectivity than the Ni/SiO2
+    catalyst" -> subject = Co/TiO2 catalyst (left of "higher ... than"),
+    object = Ni/SiO2 catalyst (right of it): that is the only way the direction
+    can be read off the sentence instead of being assumed from mention order.
+    """
+    relations: list[dict[str, Any]] = []
+    used: set[tuple[str, str, str]] = set()
+    pairs: set[tuple[str, str]] = set()
+    if len(mentions) < 2:
+        return relations
+    for relation, pattern, swap, note in DIRECTED_PATTERNS:
+        for match in pattern.finditer(sentence):
+            subject = _nearest_mention(mentions, match.start(), side="left")
+            target = _nearest_mention(mentions, match.end(), side="right")
+            if swap:
+                subject, target = target, subject
+            if not subject or not target or subject["label"] == target["label"]:
+                continue
+            preferred = PREFERRED_SOURCE_TYPES.get(relation)
+            if preferred and subject["type"] not in preferred:
+                # "reaches 85% CO2 conversion" is reported BY the material, so prefer
+                # the nearest material on the left over a nearer task/metric.
+                better = next((item for item in reversed(mentions)
+                               if item["end"] <= match.start() and item["type"] in preferred
+                               and match.start() - item["end"] <= 200), None)
+                if better is not None and better["label"] != target["label"]:
+                    subject = better
+            if relation == "supports" and subject["type"] == "method" \
+                    and target["type"] in {"material", "dataset"}:
+                # "XRD patterns confirm the formation of Ni nanoparticles" is a method
+                # characterizing a material, not a method supporting a claim.
+                relation = "characterizes"
+            if not _endpoint_types_ok(relation, subject["type"], target["type"]):
+                continue
+            key = (subject["label"], relation, target["label"])
+            if key in used:
+                continue
+            pair = (subject["label"], target["label"])
+            if pair in pairs:
+                continue  # one relation per ordered pair: no "X uses Y" on top of "X characterizes Y"
+            used.add(key)
+            pairs.add(pair)
+            gap = max(0, match.start() - subject["end"]) + max(0, target["start"] - match.end())
+            if gap <= 80:
+                strength, score = "strong", 0.9
+            elif gap <= 200:
+                strength, score = "moderate", 0.6
+            else:
+                strength, score = "weak", 0.35
+            relations.append({
+                "source_label": subject["label"],
+                "target_label": target["label"],
+                "source_type": subject["type"],
+                "target_type": target["type"],
+                "relation": relation,
+                "trigger": match.group(0).strip(),
+                "direction": "undirected" if relation in UNDIRECTED_RELATIONS else "directed",
+                "strength": strength,
+                "strength_score": score,
+                "syntactic_pattern": note,
+                "condition": "; ".join(_conditions(sentence)),
+            })
+            break  # one relation of each type per sentence keeps it readable
+    return relations
+
+
+def _co_occurrence_pairs(mentions: list[dict[str, Any]],
+                         *, limit: int = 6) -> list[dict[str, Any]]:
+    """Candidate pairs that share a sentence, closest first (NOT assertions)."""
+    base = [item for item in mentions if item["type"] != "conclusion"]
+    pairs: list[dict[str, Any]] = []
+    for index, first in enumerate(base):
+        for second in base[index + 1:]:
+            if first["label"] == second["label"]:
+                continue
+            gap = second["start"] - first["end"]
+            if gap > 240:
+                continue
+            pairs.append({"source_label": first["label"], "target_label": second["label"],
+                          "gap": gap})
+            if len(pairs) >= limit:
+                return pairs
+    return pairs
 
 
 def collect_relation_evidence(segments: list[dict[str, Any]],
                               candidates: list[dict[str, Any]],
-                              *, max_items: int = 70) -> list[dict[str, Any]]:
-    """Sentences that mention >=2 candidates, with the trigger verb found."""
-    labels = [(c["label"], c["type"]) for c in candidates
-              if not c.get("is_conclusion")]
+                              *, max_items: int = 120) -> list[dict[str, Any]]:
+    """Sentences that mention >=2 candidates, with directed triggers located."""
+    labels = [(c["label"], c["type"], bool(c.get("is_conclusion"))) for c in candidates]
     out: list[dict[str, Any]] = []
     for seg in segments:
         text = seg.get("text") or ""
         for sentence in hybrid.sentences(text):
             if len(sentence) < 25:
                 continue
-            lowered = sentence.casefold()
-            mentions: list[tuple[int, str]] = []
-            for label, _type in labels:
-                pos = lowered.find(label.casefold())
-                if pos < 0 and re.search(r"[\u4e00-\u9fff]", label):
-                    pos = sentence.find(label)
-                if pos >= 0:
-                    mentions.append((pos, label))
+            mentions = _sentence_mentions(sentence, labels)
             if len(mentions) < 2:
                 continue
-            mentions.sort()
-            relations: list[dict[str, Any]] = []
-            for index in range(len(mentions) - 1):
-                (start_a, label_a), (start_b, label_b) = mentions[index], mentions[index + 1]
-                middle = sentence[start_a + len(label_a):start_b]
-                trigger = _match_trigger(middle) or _match_trigger(sentence)
-                relations.append({
-                    "source_label": label_a,
-                    "target_label": label_b,
-                    "relation": trigger[0] if trigger else None,
-                    "trigger": trigger[1] if trigger else None,
-                })
             out.append({
                 "seg_id": seg.get("seg_id"),
                 "doc_id": seg.get("doc_id"),
                 "paragraph_id": seg.get("paragraph_id"),
                 "sentence": clip(sentence, 240),
-                "mentions": [label for _pos, label in mentions][:6],
-                "relations": relations,
+                "mentions": [item["label"] for item in mentions][:8],
+                "relations": _sentence_relations(sentence, mentions),
+                "co_occurrence_pairs": _co_occurrence_pairs(mentions),
                 "conditions": _conditions(sentence),
             })
             if len(out) >= max_items:
@@ -1135,24 +1593,22 @@ def collect_relation_evidence(segments: list[dict[str, Any]],
     return out
 
 
-def _match_trigger(text: str) -> tuple[str, str] | None:
-    for relation, pattern in RELATION_TRIGGERS:
-        match = pattern.search(text or "")
-        if match:
-            return relation, match.group(0)
-    return None
-
-
 def _conditions(sentence: str) -> list[str]:
+    """Numeric experimental conditions that really appear in this sentence.
+
+    A snippet is kept only when the lead keyword is followed by a number with a
+    unit ("at 350 C and 1 bar"), so a sentence cannot pick up "2 m" out of
+    "CO2 m..." just because the letter m is the molar unit.
+    """
     out: list[str] = []
-    for match in re.finditer(r"\b(?:at|under|in|with|when|after|before|for|within|over)\s+"
-                             r"([^,.;]{2,70})", sentence or "", flags=re.I):
-        snippet = clip(match.group(0), 90)
-        if re.search(r"\d|presence|condition", snippet, flags=re.I):
+    for match in re.finditer(r"\b(?:at|under|within|over|after|before|for|using|"
+                             r"in the presence of)\s+\d[^,.;:()]{1,40}", sentence or "", flags=re.I):
+        snippet = clip(match.group(0), 90).strip()
+        if snippet and snippet not in out:
             out.append(snippet)
     for match in CONDITION_VALUE_RE.finditer(sentence or ""):
-        snippet = match.group(0)
-        if snippet not in out:
+        snippet = match.group(0).strip()
+        if len(snippet) <= 30 and snippet and snippet not in out:
             out.append(snippet)
     unique: list[str] = []
     for item in out:
@@ -1163,9 +1619,16 @@ def _conditions(sentence: str) -> list[str]:
 
 def build_baseline_graph(docs: list[dict[str, Any]], segments: list[dict[str, Any]],
                          candidates: list[dict[str, Any]], schema: dict[str, Any],
-                         *, max_nodes: int = 90, max_edges: int = 200
-                         ) -> dict[str, Any]:
-    """Evidence-first draft graph assembled without any model judgement."""
+                         *, max_nodes: int = 90, max_edges: int = 200,
+                         max_co_occurrence_edges: int = 6) -> dict[str, Any]:
+    """Evidence-first draft graph assembled without any model judgement.
+
+    Every edge is a syntactic pattern over ONE sentence: both endpoint labels are
+    in the quote, the trigger is recorded, the direction follows the trigger and
+    the strength reflects how far apart the endpoints sit. Pairs that merely
+    co-occur are kept as an explicitly-labelled fallback (max ten) so the graph
+    does not pretend that co-occurrence is evidence of a relation.
+    """
     segments_by = {seg["seg_id"]: seg for seg in segments}
     docs_by = documents_by_id(docs)
     nodes: list[dict[str, Any]] = []
@@ -1173,7 +1636,7 @@ def build_baseline_graph(docs: list[dict[str, Any]], segments: list[dict[str, An
     for candidate in candidates:
         if not candidate.get("occurrences"):
             continue
-        nodes.append({
+        node = {
             "label": candidate["label"],
             "type": candidate["type"],
             "type_source": candidate.get("type_source") or "heuristic",
@@ -1183,57 +1646,99 @@ def build_baseline_graph(docs: list[dict[str, Any]], segments: list[dict[str, An
             "origin": "baseline",
             "candidate_id": candidate.get("candidate_id"),
             "is_conclusion": bool(candidate.get("is_conclusion")),
-        })
-        label_to_node[norm_key(candidate["label"])] = nodes[-1]
+            "variant_key": variant_key(candidate["label"]),
+        }
+        nodes.append(node)
+        label_to_node[norm_key(candidate["label"])] = node
         if len(nodes) >= max_nodes:
             break
     edges: list[dict[str, Any]] = []
     co_occurrence: dict[tuple[str, str], dict[str, Any]] = {}
+    connected: set[tuple[str, str]] = set()
     seen_edges: set[tuple[str, str, str, str]] = set()
-    for item in collect_relation_evidence(segments, candidates):
+    evidence_items = collect_relation_evidence(segments, candidates)
+    for item in evidence_items:
         seg = segments_by.get(item.get("seg_id") or "")
         doc = docs_by.get(item.get("doc_id") or "")
         if not seg or not doc:
             continue
+        # Co-occurrence is recorded for every sentence pair, but it only becomes
+        # an edge when the pair has NO asserted relation (see the fallback below).
+        for pair_item in item.get("co_occurrence_pairs") or []:
+            first = label_to_node.get(norm_key(pair_item["source_label"]))
+            second = label_to_node.get(norm_key(pair_item["target_label"]))
+            if not first or not second or first is second:
+                continue
+            cpair = tuple(sorted((norm_key(first["label"]), norm_key(second["label"]))))
+            record = co_occurrence.get(cpair)
+            if record is None:
+                record = {
+                    "source_label": first["label"],
+                    "target_label": second["label"],
+                    "seg_ids": [],
+                    "count": 0,
+                    "quote": item["sentence"],
+                    "doc_ids": [],
+                    "min_gap": pair_item.get("gap"),
+                    "asserted_relation": None,
+                }
+                co_occurrence[cpair] = record
+            record["count"] += 1
+            if seg["seg_id"] not in record["seg_ids"]:
+                record["seg_ids"].append(seg["seg_id"])
+            if doc["doc_id"] not in record["doc_ids"]:
+                record["doc_ids"].append(doc["doc_id"])
+            if (pair_item.get("gap") or 0) < (record.get("min_gap") or 10 ** 6):
+                record["min_gap"] = pair_item.get("gap")
+                record["quote"] = item["sentence"]
+                # the quote must travel with ITS segment, otherwise the anchor points
+                # at a paragraph that does not contain the sentence
+                record["quote_seg_id"] = item.get("seg_id")
+                record["quote_doc_id"] = item.get("doc_id")
         for relation_item in item.get("relations") or []:
             source = label_to_node.get(norm_key(relation_item["source_label"]))
             target = label_to_node.get(norm_key(relation_item["target_label"]))
             if not source or not target or source is target:
                 continue
-            pair = (norm_key(relation_item["source_label"]), norm_key(relation_item["target_label"]))
-            if pair not in co_occurrence:
-                co_occurrence[pair] = {
-                    "source_label": relation_item["source_label"],
-                    "target_label": relation_item["target_label"],
-                    "seg_ids": [seg["seg_id"]],
-                    "count": 1,
-                    "quote": item["sentence"],
-                    "doc_ids": [doc["doc_id"]],
-                }
-            else:
-                record = co_occurrence[pair]
-                record["count"] += 1
-                if seg["seg_id"] not in record["seg_ids"]:
-                    record["seg_ids"].append(seg["seg_id"])
-                if doc["doc_id"] not in record["doc_ids"]:
-                    record["doc_ids"].append(doc["doc_id"])
-            relation = relation_item.get("relation")
-            if not relation:
-                continue
-            canonical, direction, _known = relation_spec(schema, relation)
+            pair = tuple(sorted((norm_key(source["label"]), norm_key(target["label"]))))
+            connected.add(pair)
+            record = co_occurrence.setdefault(pair, {
+                "source_label": source["label"],
+                "target_label": target["label"],
+                "seg_ids": [],
+                "count": 0,
+                "quote": item["sentence"],
+                "doc_ids": [],
+                "asserted_relation": None,
+            })
+            record["count"] += 1
+            if relation_item.get("relation") and not record["asserted_relation"]:
+                record["asserted_relation"] = relation_item["relation"]
+            if seg["seg_id"] not in record["seg_ids"]:
+                record["seg_ids"].append(seg["seg_id"])
+            if doc["doc_id"] not in record["doc_ids"]:
+                record["doc_ids"].append(doc["doc_id"])
+            canonical, direction, known = relation_spec(schema, relation_item["relation"])
+            if canonical in UNDIRECTED_RELATIONS:
+                direction = "undirected"
             key = (doc["doc_id"], norm_key(source["label"]), canonical, norm_key(target["label"]))
             if key in seen_edges:
                 continue
             seen_edges.add(key)
             quote = item["sentence"]
+            condition = "; ".join(item.get("conditions") or [])[:200]
+            if condition and condition.split(";")[0].strip() not in quote:
+                condition = ""  # a condition that is not in the quote is not evidence
             edges.append({
                 "source_label": source["label"],
                 "target_label": target["label"],
                 "relation": canonical,
+                "relation_known": known,
                 "direction": direction,
-                "condition": "; ".join(item.get("conditions") or [])[:200],
-                "strength": "moderate",
-                "strength_score": 0.6,
+                "condition": condition,
+                "strength": relation_item.get("strength") or "moderate",
+                "strength_score": relation_item.get("strength_score") or 0.6,
+                "syntactic_pattern": relation_item.get("syntactic_pattern"),
                 "doc_id": doc["doc_id"],
                 "paragraph_id": seg.get("paragraph_id"),
                 "seg_id": seg["seg_id"],
@@ -1246,6 +1751,38 @@ def build_baseline_graph(docs: list[dict[str, Any]], segments: list[dict[str, An
                 break
         if len(edges) >= max_edges:
             break
+    # Deterministic co-occurrence fallback: only pairs with no asserted relation,
+    # ranked by how often the two labels share a sentence, capped hard.
+    fallback = [record for pair, record in co_occurrence.items() if pair not in connected]
+    fallback.sort(key=lambda record: (-record["count"], record.get("min_gap") or 10 ** 6,
+                                      norm_key(record["source_label"]),
+                                      norm_key(record["target_label"])))
+    for record in fallback[:max_co_occurrence_edges]:
+        seg = segments_by.get(record.get("quote_seg_id")
+                              or (record["seg_ids"] or [None])[0] or "")
+        doc = docs_by.get(record.get("quote_doc_id")
+                          or (record["doc_ids"] or [None])[0] or "")
+        if not seg or not doc:
+            continue
+        quote = record.get("quote") or clip(seg.get("text") or "", 240)
+        edges.append({
+            "source_label": record["source_label"],
+            "target_label": record["target_label"],
+            "relation": "co_occurs",
+            "relation_known": True,
+            "direction": "undirected",
+            "condition": "same sentence; co-occurrence only, relation NOT asserted",
+            "strength": "weak",
+            "strength_score": 0.2,
+            "syntactic_pattern": "co_occurrence_fallback",
+            "doc_id": doc["doc_id"],
+            "paragraph_id": seg.get("paragraph_id"),
+            "seg_id": seg["seg_id"],
+            "quote": quote,
+            "anchors": [seg_anchor(doc, seg, quote)],
+            "origin": "baseline",
+            "trigger": None,
+        })
     return {
         "nodes": nodes,
         "edges": edges,
@@ -1254,8 +1791,11 @@ def build_baseline_graph(docs: list[dict[str, Any]], segments: list[dict[str, An
         ][:80],
         "notes": [
             "baseline nodes were typed by a deterministic heuristic (lexicon + suffix + formula)",
-            "baseline edges require a trigger verb in the same sentence and both endpoints in the quote",
-            "co_occurrence_candidates are NOT asserted relations; they are hints for the agent",
+            "baseline edges come from a syntactic pattern in one sentence; the quote contains "
+            "BOTH endpoint labels and the trigger records how the direction was read",
+            "a condition is attached only when it appears verbatim in the same quote",
+            "co_occurrence_candidates are NOT asserted relations; at most ten weakest pairs are "
+            "also kept as relation 'co_occurs' and labelled as a non-assertion",
         ],
     }
 

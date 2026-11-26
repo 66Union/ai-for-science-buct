@@ -35,7 +35,7 @@ if str(HERE) not in sys.path:
 from kg_core import (  # noqa: E402  (same directory, both layouts)
     DEFAULT_SCHEMA, TYPE_ORDER, _best_quote, _candidate_occurrences, _contains_label,
     _match_trigger, anchor_ceiling, clip, norm_key, norm_label, public_anchor,
-    relation_spec, seg_anchor,
+    relation_spec, seg_anchor, variant_key,
 )
 
 TYPE_SYNONYMS = {
@@ -211,6 +211,13 @@ def _group_basis(group: dict[str, Any], acronym_defs: list[dict[str, Any]]) -> l
         surfaced[norm_key(member["label"])] = surfaced.get(norm_key(member["label"]), 0) + 1
     if any(count > 1 for count in surfaced.values()):
         basis.append("same_surface")
+    variant_labels: dict[str, set[str]] = {}
+    for member in members:
+        variant = variant_key(member["label"])
+        if variant:
+            variant_labels.setdefault(variant, set()).add(norm_key(member["label"]))
+    if any(len(labels) > 1 for labels in variant_labels.values()):
+        basis.append("surface_variant")
     for member in members:
         if member["origin"] != "agent" or not member.get("aliases"):
             continue
@@ -267,6 +274,11 @@ def merge_entities(entries: list[dict[str, Any]], acronym_defs: list[dict[str, A
         keys = set(entry["keys"])
         for key in list(keys):
             keys |= acronym_map.get(key, set())
+        variant = variant_key(entry["label"])
+        if variant:
+            # A trailing generic head noun does not change which object is named,
+            # so the variant key participates in alignment like an alias would.
+            keys.add(variant)
         entry["keys"] = keys
         matches = []
         for key in keys:
@@ -399,16 +411,28 @@ def _build_nodes(groups: list[dict[str, Any]], acronym_defs: list[dict[str, Any]
         if len(group["members"]) > 1:
             basis = _group_basis(group, acronym_defs)
             evidence = [public_anchor(a) for a in occurrences[:1]]
+            merged_labels = sorted({m["label"] for m in group["members"]
+                                    if norm_key(m["label"]) != norm_key(label)})
             merge_log.append({
                 "node_id": node_id,
                 "kept_label": label,
-                "merged_labels": sorted({m["label"] for m in group["members"]
-                                         if norm_key(m["label"]) != norm_key(label)}),
+                "merged_labels": merged_labels,
+                "merged_from": [
+                    {"label": m["label"], "type": m.get("type"),
+                     "doc_ids": sorted({o.get("doc_id") for o in m.get("occurrences") or []
+                                        if o.get("doc_id")}),
+                     "quote": ((m.get("occurrences") or [{}])[0].get("quote"))}
+                    for m in sorted(group["members"], key=lambda item: item["label"].casefold())
+                    if norm_key(m["label"]) != norm_key(label)
+                ],
                 "basis": basis,
                 "rule": (schema.get("merge_rules") or {}).get(basis[0], basis[0]),
-                "confidence": 0.95 if "same_surface" in basis else 0.9,
+                "confidence": (0.95 if "same_surface" in basis else
+                               0.9 if "acronym_definition" in basis else 0.85),
                 "doc_ids": node["doc_ids"],
                 "evidence": evidence,
+                "not_merged_note": ("different declared types on the same surface stay "
+                                    "separate and are logged in the conflict register"),
             })
     for index, entry in enumerate(merge_log, start=1):
         entry["merge_id"] = f"m-{index:04d}"
@@ -468,7 +492,8 @@ def _collect_edges(records: list[dict[str, Any]], node_index: dict[str, str],
 
 def _add_baseline_edges(edges: list[dict[str, Any]], baseline_edges: list[dict[str, Any]],
                         node_index: dict[str, str], rejected: list[dict[str, Any]],
-                        max_add: int = 200) -> int:
+                        max_add: int = 200,
+                        node_labels: dict[str, str] | None = None) -> int:
     added = 0
     existing = set()
     for edge in edges:
@@ -495,8 +520,8 @@ def _add_baseline_edges(edges: list[dict[str, Any]], baseline_edges: list[dict[s
         edges.append({
             "source_id": source_id,
             "target_id": target_id,
-            "source_label": record.get("source_label"),
-            "target_label": record.get("target_label"),
+            "source_label": (node_labels or {}).get(source_id) or record.get("source_label"),
+            "target_label": (node_labels or {}).get(target_id) or record.get("target_label"),
             "relation": relation,
             "relation_raw": relation,
             "relation_known": True,
@@ -518,7 +543,7 @@ def _add_baseline_edges(edges: list[dict[str, Any]], baseline_edges: list[dict[s
 
 def _add_co_occurrence_edges(edges: list[dict[str, Any]], pairs: list[dict[str, Any]],
                              node_index: dict[str, str], docs_by: dict[str, dict[str, Any]],
-                             segments_by: dict[str, dict[str, Any]], max_add: int = 60) -> int:
+                             segments_by: dict[str, dict[str, Any]], max_add: int = 4) -> int:
     added = 0
     existing = set()
     for edge in edges:
@@ -542,9 +567,13 @@ def _add_co_occurrence_edges(edges: list[dict[str, Any]], pairs: list[dict[str, 
         anchor_list = []
         quote = pair.get("quote") or ""
         if seg and doc:
-            if not quote:
+            if not quote or not _contains_label(quote, pair.get("source_label") or "") \
+                    or not _contains_label(quote, pair.get("target_label") or ""):
                 quote = _best_quote(seg.get("text") or "", [pair.get("source_label"),
                                                              pair.get("target_label")])
+            if not _contains_label(quote, pair.get("source_label") or "") \
+                    or not _contains_label(quote, pair.get("target_label") or ""):
+                continue  # a co-occurrence edge without both labels is not verifiable
             anchor_list.append(seg_anchor(doc, seg, quote))
         edges.append({
             "source_id": source_id,
@@ -606,6 +635,84 @@ def _condition_conflicts(edges: list[dict[str, Any]], nodes_by_id: dict[str, dic
     return conflicts
 
 
+# Numbers with a unit inside one quote: the doc-scoped measurements behind a
+# metric node. Used by the metric-reporting query and by the cross-paper value
+# difference register (the two papers' values are never averaged into one).
+# Only measurement units count as a metric value: pressure and temperature belong
+# to the condition of an experiment, not to the metric (a selectivity is not "10 bar").
+METRIC_VALUE_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:-?\d+(?:\.\d+)?)\s*"
+    r"(?:wt%|mol%|%|mAh/g|mg/g|mL/min|h-1|h⁻¹|eV|nm|kPa)(?![A-Za-z])",
+    re.I)
+
+
+def metric_values(quote: str, label: str = "") -> list[str]:
+    """Values that sit next to the metric label (before or after it), closest first."""
+    text = quote or ""
+    if not label:
+        return [match.group(0).strip() for match in METRIC_VALUE_RE.finditer(text)][:4]
+    pos = text.casefold().find(label.casefold())
+    if pos < 0:
+        return [match.group(0).strip() for match in METRIC_VALUE_RE.finditer(text)][:4]
+    scored: list[tuple[int, str]] = []
+    for match in METRIC_VALUE_RE.finditer(text):
+        if match.end() <= pos:
+            distance = pos - match.end()
+        elif match.start() >= pos + len(label):
+            distance = match.start() - (pos + len(label))
+        else:
+            distance = 0
+        if distance <= 20:
+            scored.append((distance, match.group(0).strip()))
+    scored.sort()
+    found: list[str] = []
+    for _distance, value in scored:
+        if value not in found:
+            found.append(value)
+        if len(found) >= 4:
+            break
+    return found
+
+
+def metric_value_conflicts(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]
+                           ) -> list[dict[str, Any]]:
+    """The same metric reported with different numbers in different papers.
+
+    This is NOT a contradiction to resolve: it is the record that the numbers
+    are doc-scoped and must not be merged into one conclusion.
+    """
+    metrics = {node["node_id"]: node for node in nodes if node["type"] == "metric"}
+    buckets: dict[str, dict[str, set[str]]] = {}
+    for edge in edges:
+        doc_id = edge.get("doc_id") or ""
+        if not doc_id:
+            continue
+        for node_id in (edge["source_id"], edge["target_id"]):
+            node = metrics.get(node_id)
+            if not node:
+                continue
+            for value in metric_values(edge.get("quote") or "", node["label"]):
+                buckets.setdefault(node_id, {}).setdefault(doc_id, set()).add(value)
+    conflicts: list[dict[str, Any]] = []
+    for node_id in sorted(buckets):
+        per_doc = {doc_id: sorted(values) for doc_id, values in sorted(buckets[node_id].items())
+                   if values}
+        if len(per_doc) < 2:
+            continue
+        if len({tuple(values) for values in per_doc.values()}) < 2:
+            continue
+        conflicts.append({
+            "kind": "cross_doc_value_difference",
+            "labels": [metrics[node_id]["label"]],
+            "doc_ids": sorted(per_doc),
+            "values_by_doc": per_doc,
+            "detail": ("the same metric reports different doc-scoped values; the numbers are "
+                       "kept per paper and are NOT averaged or merged into one conclusion"),
+            "resolution": "kept_doc_scoped",
+        })
+    return conflicts
+
+
 # --------------------------------------------------------------------------- #
 # orchestrator: generated records + deterministic draft -> final graph
 # --------------------------------------------------------------------------- #
@@ -646,16 +753,17 @@ def merge_graphs(generated: dict[str, Any], baseline: dict[str, Any],
                            segments_by, docs_by, schema, rejected, node_labels)
     generated_edges_used = len(edges)
     baseline_edges_added = _add_baseline_edges(edges, baseline.get("edges") or [],
-                                               node_index, rejected)
+                                               node_index, rejected, node_labels=node_labels)
     co_occurrence_added = 0
     if generated_edges_used == 0:
         co_occurrence_added = _add_co_occurrence_edges(
             edges, baseline.get("co_occurrence_candidates") or [], node_index,
-            docs_by, segments_by)
+            docs_by, segments_by, max_add=0)  # the baseline already carries labelled co-occurrence
     _assign_edge_ids(edges)
     nodes_by_id = {node["node_id"]: node for node in nodes}
     condition_conflicts = _condition_conflicts(edges, nodes_by_id)
-    conflicts = conflicts + condition_conflicts
+    value_differences = metric_value_conflicts(nodes, edges)
+    conflicts = conflicts + condition_conflicts + value_differences
     for index, conflict in enumerate(conflicts, start=1):
         conflict["conflict_id"] = f"x-{index:04d}"
     type_counts: dict[str, int] = {}
@@ -702,10 +810,12 @@ def merge_graphs(generated: dict[str, Any], baseline: dict[str, Any],
 # graph queries: real, executed, with evidence and honest no-result states
 # --------------------------------------------------------------------------- #
 QUERY_OPS = ("neighbors", "relation", "type_list", "evidence_lookup",
-             "cross_doc_shared", "cross_doc_consistency", "path", "unresolved")
+             "cross_doc_shared", "cross_doc_consistency", "path", "unresolved",
+             "material_methods", "metric_reporters", "conclusion_evidence")
 PARAM_KEYS = ("entity", "entity_id", "node", "node_id", "label", "relation",
               "relation_type", "node_type", "ref", "ref_id", "edge", "edge_id",
-              "source", "target", "from", "to", "max_hops", "depth", "type")
+              "source", "target", "from", "to", "max_hops", "depth", "type",
+              "material", "metric", "conclusion", "ref_label")
 
 
 def normalize_queries(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -821,7 +931,7 @@ def execute_queries(nodes: list[dict[str, Any]], edges: list[dict[str, Any]],
         results.append(_run_query(definition, op, params, index, nodes, edges,
                                   conflicts, unverified, documents, stats))
     executed = sum(1 for result in results if result["status"] in {"answered", "no_result", "undetermined"})
-    auto_limit = max(0, min(12, 6 - len(results)))
+    auto_limit = max(0, min(12, 9 - len(results)))
     if executed < 3:
         template_map = {str(item.get("op")): item for item in (templates or [])
                         if isinstance(item, dict) and item.get("op")}
@@ -929,6 +1039,16 @@ def _run_query(definition: dict[str, Any], op: str, params: dict[str, Any],
         shared = [node for node in nodes if len(node.get("doc_ids") or []) > 1
                   and (wanted_type is None or node["type"] == wanted_type)]
         if not shared:
+            shared = [node for node in nodes if len(node.get("doc_ids") or []) > 1]
+            if shared:
+                return _result(definition, status="answered",
+                               answer=(f"no node of type '{wanted_type}' spans both papers; "
+                                       f"{len(shared)} node(s) do appear in more than one paper "
+                                       f"at concept level: "
+                                       + ", ".join(node["label"] for node in shared[:8])),
+                               nodes=shared,
+                               limitations=["cross-paper identity is asserted at concept level "
+                                            "only; per-paper samples and conditions stay separate"])
             return _result(definition, status="no_result",
                            answer=("no concept of this type is confirmed in more than one paper; "
                                    "cross-paper identity is not assumed"))
@@ -954,6 +1074,83 @@ def _run_query(definition: dict[str, Any], op: str, params: dict[str, Any],
                                f"sample or dataset instance; identity across papers cannot be "
                                f"determined from the package"),
                        nodes=material_nodes)
+    if op == "material_methods":
+        node_id = _resolve_node(index, params.get("material") or params.get("entity")
+                                or params.get("label") or params.get("node_id"))
+        if not node_id:
+            return _result(definition, status="no_result",
+                           answer="the material never names the requested material")
+        node = by_id[node_id]
+        linked = [edge for edge in index["adjacency"].get(node_id, [])
+                  if edge["relation"] in {"characterizes", "uses", "applies_to",
+                                          "evaluates_on"}]
+        methods: dict[str, dict[str, Any]] = {}
+        for edge in linked:
+            other = edge["target_id"] if edge["source_id"] == node_id else edge["source_id"]
+            other_node = by_id.get(other)
+            if other_node and other_node["type"] == "method":
+                methods.setdefault(other, other_node)
+        if not methods:
+            return _result(definition, status="no_result",
+                           answer=(f"no method is linked to '{node['label']}' by an evidenced "
+                                   f"relation in this graph"),
+                           nodes=[node])
+        ordered = [methods[key] for key in sorted(methods)]
+        return _result(definition, status="answered",
+                       answer=(f"{len(ordered)} method(s) are evidenced for '{node['label']}': "
+                               + ", ".join(item["label"] for item in ordered[:8])),
+                       nodes=[node] + ordered, edges=linked)
+    if op == "metric_reporters":
+        node_id = _resolve_node(index, params.get("metric") or params.get("entity")
+                                or params.get("label") or params.get("node_id"))
+        if not node_id:
+            metrics = sorted((node for node in nodes if node["type"] == "metric"),
+                             key=lambda node: node["node_id"])
+            if not metrics:
+                return _result(definition, status="no_result",
+                               answer="the material reports no measurable metric")
+            node_id = metrics[0]["node_id"]
+        node = by_id[node_id]
+        incident = index["adjacency"].get(node_id, [])
+        per_doc: dict[str, list[str]] = {}
+        for edge in incident:
+            doc_id = edge.get("doc_id") or "unknown"
+            for value in metric_values(edge.get("quote") or "", node["label"]):
+                if value not in per_doc.setdefault(doc_id, []):
+                    per_doc[doc_id].append(value)
+        if not incident:
+            return _result(definition, status="no_result",
+                           answer=f"no relation in the graph reports '{node['label']}'",
+                           nodes=[node])
+        parts = [f"{doc_id}: " + (", ".join(values) if values else "no numeric value in the "
+                                  "cited quote") for doc_id, values in sorted(per_doc.items())]
+        return _result(definition, status="answered",
+                       answer=(f"'{node['label']}' is reported by {len(per_doc) or 0} paper(s) — "
+                               + "; ".join(parts)
+                               + ". Values stay doc-scoped and are not merged into one number"),
+                       nodes=[node], edges=incident,
+                       limitations=["a value reported in one paper is NOT evidence for the "
+                                    "other paper's sample or conditions"])
+    if op == "conclusion_evidence":
+        conclusions = sorted((node for node in nodes if node["type"] == "conclusion"
+                              or node.get("is_conclusion")), key=lambda node: node["node_id"])
+        if not conclusions:
+            return _result(definition, status="no_result",
+                           answer="the material states no claim that was extracted as a conclusion")
+        wanted = _resolve_node(index, params.get("conclusion") or params.get("entity")
+                               or params.get("label") or params.get("node_id"))
+        node = by_id.get(wanted) if wanted else conclusions[0]
+        if not node or node["type"] != "conclusion":
+            node = conclusions[0]
+        anchors_list = [public_anchor(anchor) for anchor in node.get("occurrences") or []]
+        quote = (anchors_list[0].get("quote") if anchors_list else "") or ""
+        return _result(definition, status="answered",
+                       answer=(f"the claim is stated in paragraph "
+                               f"{anchors_list[0].get('paragraph_id') if anchors_list else '?'} "
+                               f"of {anchors_list[0].get('doc_id') if anchors_list else '?'}: "
+                               f"\"{quote[:180]}\"") if anchors_list else
+                              f"the claim '{node['label']}' has no located quote",
+                       nodes=[node], evidence=anchors_list)
     if op == "path":
         source = _resolve_node(index, params.get("source") or params.get("from"))
         target = _resolve_node(index, params.get("target") or params.get("to"))
@@ -1031,65 +1228,108 @@ def auto_query_defs(index: dict[str, Any], nodes: list[dict[str, Any]],
                     edges: list[dict[str, Any]], stats: dict[str, Any],
                     conflicts: list[dict[str, Any]],
                     documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Deterministic query set, used when the agent declared fewer than three."""
+    """Deterministic query set, used when the agent declared fewer than three.
+
+    The set answers the questions the topic statement grades: what is connected
+    to a node, which methods are evidenced for a material, which paper reports a
+    metric and with which doc-scoped numbers, where a claim is stated, whether the
+    two papers share a physical sample, and what could not be determined.
+    """
     by_id = index["by_id"]
     definitions: list[dict[str, Any]] = []
     degree: dict[str, int] = {}
     for edge in edges:
         degree[edge["source_id"]] = degree.get(edge["source_id"], 0) + 1
         degree[edge["target_id"]] = degree.get(edge["target_id"], 0) + 1
-    if degree:
-        top = sorted(degree, key=lambda node_id: (-degree[node_id], node_id))[0]
+
+    def ranked(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(candidates, key=lambda node: (-degree.get(node["node_id"], 0),
+                                                    node["node_id"]))
+
+    entities = [node for node in nodes if node["type"] != "conclusion"] or list(nodes)
+    if entities:
+        top = ranked(entities)[0]
         definitions.append({
             "query_id": "auto-q1",
-            "natural_language": f"Which entities are directly connected to '{by_id[top]['label']}', and where is that relation evidenced?",
-            "op": "neighbors",
-            "params": {"entity": top},
+            "natural_language": (f"与「{top['label']}」直接相连的实体有哪些？"
+                                 f"它们的关系依据是什么？"),
+            "op": "neighbors", "params": {"entity": top["node_id"]},
         })
-    if edges:
+    asserted_edges = [edge for edge in edges if edge["relation"] != "co_occurs"]
+    if asserted_edges:
         relation_counts: dict[str, int] = {}
-        for edge in edges:
+        for edge in asserted_edges:
             relation_counts[edge["relation"]] = relation_counts.get(edge["relation"], 0) + 1
         top_relation = sorted(relation_counts, key=lambda rel: (-relation_counts[rel], rel))[0]
         definitions.append({
             "query_id": "auto-q2",
-            "natural_language": f"Which '{top_relation}' relations does the material support, and where?",
-            "op": "relation",
-            "params": {"relation": top_relation},
+            "natural_language": (f"图谱中所有「{top_relation}」关系分别有哪些，"
+                                 f"证据在哪一段？"),
+            "op": "relation", "params": {"relation": top_relation},
         })
-        top_edge = sorted(edges, key=lambda edge: edge["edge_id"])[0]
+        top_edge = sorted(asserted_edges, key=lambda edge: edge["edge_id"])[0]
         definitions.append({
             "query_id": "auto-q3",
-            "natural_language": f"Where in the papers is the relation between '{top_edge['source_label']}' and '{top_edge['target_label']}' stated?",
+            "natural_language": (f"「{top_edge.get('source_label')}」与"
+                                 f"「{top_edge.get('target_label')}」这条 "
+                                 f"{top_edge['relation']} 关系的原文依据是什么？"),
             "op": "evidence_lookup",
-            "params": {"edge_id": top_edge["edge_id"]},
+            "params": {"edge_id": top_edge["edge_id"],
+                       "ref_label": (f"{top_edge.get('source_label')} -"
+                                     f"{top_edge['relation']}-> "
+                                     f"{top_edge.get('target_label')}")},
         })
-    else:
-        top_node = sorted(nodes, key=lambda node: node["node_id"])[0] if nodes else None
-        if top_node:
-            definitions.append({
-                "query_id": "auto-q2",
-                "natural_language": f"Where in the material is '{top_node['label']}' named?",
-                "op": "evidence_lookup",
-                "params": {"node_id": top_node["node_id"]},
-            })
+    elif nodes:
+        top_node = sorted(nodes, key=lambda node: node["node_id"])[0]
+        definitions.append({
+            "query_id": "auto-q2",
+            "natural_language": f"材料在哪里提到「{top_node['label']}」？",
+            "op": "evidence_lookup", "params": {"node_id": top_node["node_id"],
+                                                "ref_label": top_node["label"]},
+        })
+    materials = ranked([node for node in nodes if node["type"] == "material"])
+    if materials:
+        material = materials[0]
+        definitions.append({
+            "query_id": "auto-q4",
+            "natural_language": (f"材料「{material['label']}」与哪些方法有证据关系？"
+                                 f"依据在哪一段？"),
+            "op": "material_methods", "params": {"material": material["node_id"]},
+        })
+    metrics = ranked([node for node in nodes if node["type"] == "metric"])
+    if metrics:
+        metric = metrics[0]
+        definitions.append({
+            "query_id": "auto-q5",
+            "natural_language": (f"哪些论文报告了指标「{metric['label']}」，"
+                                 f"各自的数值是多少？"),
+            "op": "metric_reporters", "params": {"metric": metric["node_id"]},
+        })
+    conclusions = sorted((node for node in nodes if node["type"] == "conclusion"),
+                         key=lambda node: node["node_id"])
+    if conclusions:
+        definitions.append({
+            "query_id": "auto-q6",
+            "natural_language": (f"哪一段原文支持结论「{conclusions[0]['label'][:60]}」，"
+                                 f"原句是什么？"),
+            "op": "conclusion_evidence",
+            "params": {"conclusion": conclusions[0]["node_id"]},
+        })
     definitions.append({
-        "query_id": "auto-q4",
-        "natural_language": "Which methods or materials appear in both papers?",
-        "op": "cross_doc_shared",
-        "params": {"node_type": "method"},
+        "query_id": "auto-q7",
+        "natural_language": ("两篇材料共同出现的概念或方法有哪些？"
+                             "（只在概念层对齐，不假设同一物理样品）"),
+        "op": "cross_doc_shared", "params": {"node_type": "method"},
     })
     definitions.append({
-        "query_id": "auto-q5",
-        "natural_language": "Do the two papers describe the same physical sample or experimental condition, and what remains undetermined?",
-        "op": "cross_doc_consistency",
-        "params": {},
+        "query_id": "auto-q8",
+        "natural_language": "两篇论文是否使用了相同的物理样品、数据集或实验条件？",
+        "op": "cross_doc_consistency", "params": {},
     })
     definitions.append({
-        "query_id": "auto-q6",
-        "natural_language": "Which merge decisions or relations could not be determined from the material?",
-        "op": "unresolved",
-        "params": {},
+        "query_id": "auto-q9",
+        "natural_language": "哪些关系或合并存在冲突、证据不足，无法确定？",
+        "op": "unresolved", "params": {},
     })
     return definitions
 

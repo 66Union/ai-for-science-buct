@@ -1,7 +1,7 @@
 ---
 name: reading-15-knowledge-graph
-description: Build an evidence-bound literature knowledge graph from one or more papers - extract entities (researcher/material/method/task/metric/conclusion), align aliases and acronyms across papers without merging homonyms, keep only relations the text actually states (with direction, condition and a verbatim quote), bind every node and edge to a paragraph locator, execute at least three real queries, and export graph.json / nodes.csv / edges.csv / graph.graphml plus a result.json that mirrors the case output_contract. Use when a task asks to construct, align, query or audit a citation/evidence-grounded knowledge graph from research literature.
-version: 1.0.0
+description: Build an evidence-bound literature knowledge graph from one or more papers - extract entities (researcher/material/method/task/metric/conclusion), align aliases, acronyms and sample-name variants across papers without merging homonyms, keep only relations the text actually states (with direction, condition and a verbatim quote), bind every node and edge to a paragraph locator, execute at least three real queries (including which methods are evidenced for a material and which papers report a metric), and export graph.json / nodes.csv / edges.csv / graph.graphml plus a result.json that mirrors the case output_contract. Delivers a complete deterministic graph with status=success even when no agent judgement layer runs. Use when a task asks to construct, align, query or audit a citation/evidence-grounded knowledge graph from research literature.
+version: 1.1.0
 author: 66Union
 license: MIT
 tags: [knowledge-graph, entity-alignment, relation-extraction, evidence-grounding, output-contract, two-phase-hybrid, graphml]
@@ -16,16 +16,16 @@ tags: [knowledge-graph, entity-alignment, relation-extraction, evidence-groundin
 | 考察问题 | 本技能的做法 | 可验证的证据 |
 |---|---|---|
 | **抽得准** | 候选实体由确定性抽取器给出（重复术语、缩写、化学式、大写短语、领域词表、作者行、含主张标记的结论句），Agent 只做"是不是论文里真实出现的科研对象"的判断；实体必须能在材料段落中定位到逐字文本 | graph_nodes[].evidence[] 的 paragraph_id + quote；丢掉无法定位的实体并记入 evidence.json.unverified |
-| **连得对** | 只保留有触发动词支撑的边；每条边带 relation / direction / condition / strength；边的 quote 必须同时包含两端实体的写法，否则代码断言失败、该边被丢弃 | relationship_edges[].quote；graph_audit_metrics.grounding |
-| **对得齐** | 三类合并依据（同形归一 / 材料内缩写定义 / Agent 显式别名），每次合并记录 kept_label、merged_labels、basis、confidence、evidence；类型不同的同名对象**永不合并**，进 conflict_register | entity_alias_map[].basis；conflict_register[].kind=homonym_type_conflict |
-| **查得到、回得去** | 至少 3 个真实执行的查询（邻居 / 关系过滤 / 类型清单 / 证据定位 / 跨篇共享 / 跨篇一致性 / 路径 / 未决问题），每个结果带结果子图与支撑证据；无证据时明确返回 no_result 或 undetermined，不编造 | query_outcome_bundle[].status/answer/evidence；source_evidence_anchors[] |
+| **连得对** | 只保留同句句法模式支撑的边：方向由触发词在句中的位置决定（X 在 Y 左侧/右侧、被动句主宾互换、higher ... than 跨短语取两端）；每条边带 relation / direction / condition / strength / syntactic_pattern；条件只有在该句原句中逐字出现才附加；边的 quote 必须同时包含两端实体的写法，否则代码断言失败、该边被丢弃 | relationship_edges[].quote / direction / condition；graph_audit_metrics.grounding |
+| **对得齐** | 四类合并依据（同形归一 / 材料内缩写定义（含 X-ray → XRD 这类首字母推导）/ 词尾通用中心词差异（Ni/SiO2 catalyst ↔ Ni/SiO2）/ Agent 显式别名），每次合并记录 kept_label、merged_labels、merged_from（逐条含原文引文）、basis、confidence、evidence；类型不同的同名对象**永不合并**，进 conflict_register | entity_alias_map[].basis/merged_from；conflict_register[] |
+| **查得到、回得去** | 至少 3 个真实执行的查询（邻居 / 关系过滤 / 类型清单 / 证据定位 / 材料-方法 / 指标报告者 / 结论出处 / 跨篇共享 / 跨篇一致性 / 路径 / 未决问题），每个结果带结果子图与支撑证据；指标类查询按论文分别列出数值并说明不合并；无证据时明确返回 no_result 或 undetermined，不编造 | query_outcome_bundle[].status/answer/evidence；source_evidence_anchors[] |
 
 **与常见做法的差异**：
 1. **两阶段混合架构**：切段、找候选、抽机器可判事实、回源校验全部不消耗模型请求（Harbor 预算 64 请求 / 900 秒），模型只做判断层；同一输入重复运行结果逐字节一致。
 2. **证据是代码断言，不是模型自述**：每条节点/边的 quote 由 anchors.verify 回源定位，并额外要求节点 quote 含该实体写法、边 quote 同时含两端写法；失败即丢弃并记账。
 3. **契约反射**：result.json 由 case.json 的 output_contract 反射生成，隐藏案例的字段名不可知，本技能不写死 schema；缺值按声明类型占位并列入 meta.contract_fields_not_reported。
 4. **定位不造假**：材料包给的是 JATS/发布方段落 ID 时，anchor.page 一律为 null（locator_kind=jats_paragraph_id 或 generated_paragraph_id），绝不把自建序号叫 PDF 页码；只有材料真的是 PDF 时才报告真实页码。
-5. **同名冲突不强行合并**、**跨篇同一关系但条件不同不合并成一条结论**、**生成内容缺失时降级为确定性基线图**而不是空结果。
+5. **同名冲突不强行合并**、**跨篇同一关系但条件不同不合并成一条结论**、**跨篇同一指标的数值差异单独登记**；**Agent 生成内容缺失时交付确定性基线图**：这份基线不是占位，它本身是成功产出（status=success，meta.method 写明 deterministic baseline）。
 6. **增量保号**：同一输出目录重跑时，命中既有图节点（同类型 + 同归一化 surface）的节点沿用原 node_id，便于"新论文加入时保留既有编号"。
 
 ## 二、适用条件
@@ -51,7 +51,9 @@ tags: [knowledge-graph, entity-alignment, relation-extraction, evidence-groundin
 # 0) 进入技能根目录（平台安装位置）
 cd /skills/weekly-skill
 
-# 1) 默认：prepare + finalize 一次跑完，并在没有 Agent 生成文件时交付确定性基线图
+# 1) 默认：prepare + finalize 一次跑完。即使没有任何 work/generated/*.json，
+#    也交付一份完整、可复核的确定性知识图谱（status=success，
+#    meta.method="deterministic baseline (no agent judgement)"）
 python scripts/run_kg.py --all --out /app/output
 
 # 2) 两阶段：先准备批工作表与草稿图（同时先落一份基线 result.json）
@@ -63,8 +65,8 @@ python scripts/run_kg.py --finalize --out /app/output --work /app/output/work
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| --all | 默认模式 | prepare + finalize；无 Agent 生成内容时自动降级基线图 |
-| --prepare | 关 | 只做确定性准备：材料发现、切段、候选实体、关系证据、批工作表、草稿图；结束时先落一份 status=partial 的基线 result.json |
+| --all | 默认模式 | prepare + finalize；无 Agent 生成内容时交付确定性基线图（完整成功产出，不是降级占位） |
+| --prepare | 关 | 只做确定性准备：材料发现、切段、候选实体、关系证据、批工作表、草稿图；结束时立即写出完整基线 result.json |
 | --finalize | 关 | 读取 work/generated/*.json，合并、回源校验、执行查询、反射契约、导出图文件 |
 | --out | 自动探测 /app/output、/output、output | 输出目录 |
 | --work | <out>/work | 工作表与 Agent 生成文件目录 |
@@ -82,7 +84,7 @@ python scripts/run_kg.py --finalize --out /app/output --work /app/output/work
 
 | 文件 | 内容 |
 |---|---|
-| result.json | case_id + **契约字段**（按 case.json 声明顺序）+ meta（status、映射表、占位字段、limits、uncertainty、change_log、evidence 摘要、output_files） |
+| result.json | case_id + **契约字段**（按 case.json 声明顺序）+ meta（status、method、status_rationale、completeness、contract_field_mapping、placeholders、limits=degradations=真实降级、notes=生产方式说明、uncertainty、change_log、evidence 摘要、output_files）+ **顶层兼容键**（nodes / edges / triples / graph / knowledge_graph / queries / query_results / evidence_bundle / source_metadata / provenance，均为裁剪视图；契约声明的同名字段优先） |
 | evidence.json | grounding 汇总、逐节点/逐边证据与校验结果、别名合并记录、冲突、被丢弃的不可验证断言、材料清单、查询执行记录 |
 | run_report.json | 状态、耗时、预算、材料与引擎、生成文件清单、生成的节点/边使用量、增量信息、limits / uncertainty |
 | graph.json | 可读图谱（nodes / edges / merge_log / conflicts / documents / stats） |
@@ -93,9 +95,11 @@ python scripts/run_kg.py --finalize --out /app/output --work /app/output/work
 
 | status | 判定 |
 |---|---|
-| success | 有材料，且 Agent 生成的节点与边至少各有一条通过校验，无不可验证断言被丢弃，≥3 个查询可执行，未触发软截止 |
-| partial | 有材料但发生降级：无 work/generated/*.json、生成的节点或边全部被丢弃、有断言因证据不可定位被丢弃、可执行查询不足 3 个、超过 720 秒软截止 |
+| success | 有材料，且交付图满足全部完整性条件：节点 ≥3、边 ≥3、**每个节点与每条边都通过回源校验**、可执行查询 ≥3、没有因证据不可定位而丢弃的断言、未触发软截止。**确定性基线图满足这些条件时同样是 success**（meta.method 写明 "deterministic baseline (no agent judgement)"），不因为"没调用模型"而降级 |
+| partial | 有材料但发生真实降级：有断言因证据不可定位被丢弃、可执行查询不足 3 个、超过 720 秒软截止、生成记录全部被丢弃 |
 | failed | 没有任何可用材料（仍写出契约形状与失败原因，绝不零字节） |
+
+判定完全由 **degradations**（真实降级）决定；**notes** 只说明图是怎么产出的（例如"没有 work/generated/*.json，交付确定性基线"），不影响 status。完整性明细见 meta.completeness，逐条列出 8 个判据的通过情况。
 
 ## 四、核心工作流
 
@@ -108,12 +112,16 @@ python scripts/run_kg.py --finalize --out /app/output --work /app/output/work
 1. **材料发现与分类**（见 §3 输入发现顺序），写 work/doc_index.json：每篇论文的 doc_id、角色、来源文件、title/DOI/authors/license、元数据来源（own_file / corpus_manifest / not_reported）、定位方式、段落数。
 2. **段落解析**：对 JSON 材料识别三种形态（一文件一篇 / 一个 papers 列表 / 段落自带 doc_id 的汇总文件）；保留材料自带的 paragraph_id（locator_kind=jats_paragraph_id），缺失时生成 <doc>-p0001（generated_paragraph_id）。非 JSON 材料走 lib/extract 引擎链（PyMuPDF → pdfplumber → 外部工具 → 内置解析器），真实 PDF 报告真实页码。
 3. **切段**：调用 hybrid.build_segments，一段一块（块长超限时按句边界切分），生成全局唯一 seg_id（doc-01-s0001 形式）；每段携带 doc_id、paragraph_id、section、bbox、文本。
-4. **候选实体**（只是清单，不是决定）：重复术语（2/3-gram + 缩写词）、大写短语、化学式（TiO2 / Ni/SiO2）、领域词表（方法/指标/材料/任务）、作者行与 "X et al."、含主张标记的结论句；逐个候选回扫段落生成最多 3 个证据锚点，启发式给类型，写 work/entity_candidates.json。
-5. **关系证据**：逐句找同时提到 ≥2 个候选的句子，检测触发动词（outperform / compared with / supports / contradicts / evaluated on / characterized by / uses / improves / leads to / proposes / is a），抽取条件片段（温度、压力、浓度、数据集），写 work/relation_evidence.json。
-6. **草稿图**：把候选实体与触发词边组装成 work/baseline_graph.json（含 co_occurrence_candidates 共现候选，并明确标注"共现不是关系"）。
+4. **候选实体**（只是清单，不是决定）：重复术语（2/3-gram + 缩写词）、大写短语、化学式（完整多元素式，如 Ni/SiO2 / Co/TiO2）、领域词表（方法/指标/材料/任务）、作者行与 "X et al."、含主张标记的结论句；逐个候选回扫段落生成最多 3 个证据锚点，启发式给类型。
+   - **样品名修复**：词尾是通用中心词（catalyst / sample / reaction …）且所有出现都被同一个元素前缀修饰时，恢复完整样品名（"SiO2 catalyst" → "Ni/SiO2 catalyst"），不把截断表面当实体。
+   - **缩写全称回填**：材料里"全称（缩写）"或"缩写（全称）"（含中英混排、X-ray 这类连字符首字母）会被推导校验，全称也作为候选实体，供后续别名合并。
+   - **被包含表面消歧**：若某个词的每次出现都落在更长的候选表面内部（diffraction → X-ray diffraction），则只保留长表面，避免重复节点。
+   - 结果写 work/entity_candidates.json，被淘汰的表面写进 screened_out（result.meta.additional_outputs）。
+5. **关系证据**：逐句检测 17 类句法模式（see §六），**方向由触发词位置决定**（左实体→右实体；被动句主宾互换；higher … than 取跨短语两端；方法表征/材料报告指标等有端点类型约束），抽取条件片段（温度、压力、负载、时间）并在写边时校验条件必须出现在同句原文里，写 work/relation_evidence.json。
+6. **草稿图**：把候选实体与句法关系组装成 work/baseline_graph.json（含 co_occurrence_candidates 共现候选，并明确标注"共现不是关系"）；正句法关系不足时最多补 6 条带 "relation NOT asserted" 标注的 co_occurs 边，保证查询连通性但不冒充证据。
 7. **批工作表**：按每批 ≤6 段、≤4800 字符切批，写 work/batches/batch-XX.json（含 documents、segments、candidate_entities、relation_hints、expected_shape、write_to）。
 8. **协议与清单**：写 work/agent_protocol.md（Agent 生成协议全文）、work/query_seeds.json（可执行查询种子 + 可复用查询模板）、work/manifest.json（统计与下一步命令）。
-9. **先落基线结果**：prepare 末尾立即跑一次 finalize 逻辑但忽略未生成的 Agent 内容，写出一份完整的确定性基线 result.json（status=partial）。这样即使 Agent 不写任何生成文件，也会得到一份合法图谱；后续 --finalize 只是覆盖升级。
+9. **先落基线结果**：prepare 末尾立即跑一次 finalize 逻辑但忽略未生成的 Agent 内容，写出一份**完整**的确定性基线 result.json（节点、边、别名合并、冲突、查询、证据全部就位；满足完整性条件时 status=success）。这样即使 Agent 不写任何生成文件，交付物本身仍然是一份可复核的图谱；后续 --finalize 只是把 Agent 的判断合并进来升级。
 
 ### 阶段 2：Agent 判断层
 
@@ -125,13 +133,14 @@ python scripts/run_kg.py --finalize --out /app/output --work /app/output/work
 2. **证据定位与回源校验**：Agent 给的 seg_id 必须在段落清单里；quote 必须是段落文本的子串（大小写可不同）；节点要求 quote 含 label 或其别名；边要求 quote 同时含两端写法（label 或别名）。每类记录实际调用 anchors.verify 回源，失败即丢弃并写入 evidence.json.unverified。
 3. **别名合并与同名冲突**（见 §六 合并规则）。
 4. **跨篇条件冲突**：同一对节点、同一关系在多篇论文中条件不同 → 保留 doc-scoped 边，不合成一条结论，写入 conflict_register（kind=cross_doc_condition_conflict）。
-5. **查询执行**：先执行 Agent 声明的查询，不足 3 个可执行查询时用确定性模板补齐；结果带结果子图与证据。
-6. **导出与契约反射**：导出 graph.json / nodes.csv / edges.csv / graph.graphml，再调用 hybrid.finalize 反射 output_contract 写 result.json / evidence.json / run_report.json。
-7. **增量保号**：若输出目录已有 graph.json，按（类型 + 归一化标签/别名）匹配既有节点并沿用 node_id，run_report 记录 preserved/new。
+5. **跨篇数值差异登记**：同一指标节点在不同论文的引文里给出不同数值 → 写入 conflict_register（kind=cross_doc_value_difference，含 values_by_doc），明确"数值按论文保留、不平均、不合并成一条结论"。
+6. **查询执行**：先执行 Agent 声明的查询，不足 3 个可执行查询时用确定性查询集补齐（最多 9 个：邻居 / 关系 / 证据定位 / 材料-方法 / 指标报告者 / 结论出处 / 跨篇共享 / 跨篇一致性 / 未决问题）；每个结果带结果子图、证据与 limitations。
+7. **导出与契约反射**：导出 graph.json / nodes.csv / edges.csv / graph.graphml，再调用 hybrid.finalize 反射 output_contract 写 result.json / evidence.json / run_report.json；同时通过 extra= 暴露顶层兼容键（裁剪视图），并写 meta.method / meta.status_rationale / meta.completeness / meta.graph_summary。
+8. **增量保号**：若输出目录已有 graph.json，按（类型 + 归一化标签/别名）匹配既有节点并沿用 node_id，run_report 记录 preserved/new。
 
 ### 阶段 4：状态与降级
 
-按 §三 的状态判定计算 success/partial/failed；降级原因逐条写入 result.meta.limits 并同步到 run_report。
+按 §三 的状态判定计算 success/partial/failed：只有 **degradations**（真实降级）进入 meta.limits 并影响 status；**notes** 记录生产方式（如无 Agent 生成时交付确定性基线）。同时写 meta.completeness（8 条判据逐项布尔值 + 计数）与 meta.method（deterministic baseline / deterministic extraction + agent judgement）。
 
 ## 五、Agent 操作协议（精确命令与 JSON 格式）
 
@@ -269,7 +278,7 @@ python -c "import json;d=json.load(open('/app/output/evidence.json',encoding='ut
 | concept | 不属于上述类型的科研概念 |
 | other | 真实实体但类型不在词表内 |
 
-### 关系类型（15）
+### 关系类型（17）
 
 | relation | 方向 | 定义 |
 |---|---|---|
@@ -286,10 +295,14 @@ python -c "import json;d=json.load(open('/app/output/evidence.json',encoding='ut
 | is_a | directed | source 是 target 的一种 |
 | compares_with | undirected | 二者被比较 |
 | part_of | directed | source 是 target 的一部分 |
-| co_occurs | undirected | 确定性降级：同段共现，**明确不断言关系** |
+| contains | directed | source 由 target 组成 / 包含 target（composed of / consists of / contains） |
+| reports_metric | directed | source 报告了 target 指标的数值（reaches / achieves / exhibits；数值按论文保留） |
+| co_occurs | undirected | 确定性降级：同句/同段共现，**明确不断言关系**（condition 写明 "relation NOT asserted"） |
 | other | unspecified | 真实但不在词表的关系（关系名保留在 relation_raw，relation_known=false） |
 
-别名规范：use/used/employ 等映射到 uses；better_than/superior_to 映射到 outperforms；compared_with/vs 映射到 compares_with；同义表见 resources/kg_schema.json 的 relation_aliases。
+别名规范：use/used/employ 等映射到 uses；better_than/superior_to 映射到 outperforms；compared_with/vs/alternative_to 映射到 compares_with；composed_of/consists_of 映射到 contains；reaches/achieves 映射到 reports_metric；同义表见 resources/kg_schema.json 的 relation_aliases。
+
+方向判定规则（确定性层）：触发词左最近的实体 = source，右最近的实体 = target；被动结构（was characterized by / was synthesized by）按模式表决定是否互换；比较结构 "higher A than B" 把 source 取 "higher" 之前、target 取 "than" 之后；端点类型不符（例如 method→material 的 characterizes 却写成 supports）按端点类型表纠正或丢弃。
 
 ### 强度
 
@@ -313,12 +326,14 @@ evidence_id、kind（node/edge）、ref_id、label、doc_id、paragraph_id、pag
 
 ### 合并与冲突字段
 
-- entity_alias_map[]：merge_id、node_id、kept_label、merged_labels[]、basis[]（same_surface / acronym_definition / agent_alias / label_variant）、rule、confidence（同形 0.95，其余 0.9）、doc_ids、evidence[]。
-- conflict_register[]：conflict_id、kind（homonym_type_conflict / cross_doc_condition_conflict）、labels[]、types[] 或 relation、doc_ids、conditions[]、detail、resolution（kept_separate / kept_doc_scoped）。
+- entity_alias_map[]：merge_id、node_id、kept_label、merged_labels[]、**merged_from[]**（逐条含 label / type / doc_ids / quote，说明每个被合并表面在哪句原文出现）、basis[]（same_surface / **acronym_definition** / **surface_variant** / agent_alias / label_variant）、rule、confidence（同形 0.95 / 缩写 0.9 / 词尾变体 0.85）、doc_ids、evidence[]、not_merged_note。
+- conflict_register[]：conflict_id、kind（**homonym_type_conflict** / **cross_doc_condition_conflict** / **cross_doc_value_difference** / **acronym_definition_conflict**）、labels[]、types[] 或 relation / values_by_doc、doc_ids、conditions[] / candidates[]、detail、resolution（kept_separate / kept_doc_scoped / kept_first_definition）。
 
 ### 质量字段（result.graph_audit_metrics）
 
-documents、paragraphs、segments、nodes、edges、node_type_counts、relation_type_counts、entity_type_coverage{required,present,ratio}、relation_type_coverage{schema_types,present,ratio,off_schema_relations}、cross_doc{shared_nodes,shared_node_types}、grounding{claims_total,grounded,ungrounded,grounding_rate,anchor_quality,confidence_ceiling,effective_confidence,graph_grounding_rate,method}、alias_merge{merge_groups,merged_labels,conflicts}、coverage{node_evidence_ratio,edge_evidence_ratio}、generated{nodes_declared,nodes_used,edges_declared,edges_used,baseline_edges_added,co_occurrence_edges_added,source}、queries{declared_queries,executed_queries,answered,no_result,undetermined,unsupported,minimum_three_queries_satisfied}、incremental{preserved_node_ids,new_node_ids,previous_graph_found}、fallbacks[]、deterministic、schema_version。
+documents、paragraphs、segments、nodes、edges、node_type_counts、relation_type_counts、entity_type_coverage{required,present,ratio}、relation_type_coverage{schema_types,present,ratio,off_schema_relations}、cross_doc{shared_nodes,shared_node_types}、grounding{claims_total,grounded,ungrounded,grounding_rate,anchor_quality,confidence_ceiling,effective_confidence,graph_grounding_rate,method}、alias_merge{merge_groups,merged_labels,conflicts}、coverage{node_evidence_ratio,edge_evidence_ratio}、generated{nodes_declared,nodes_used,edges_declared,edges_used,baseline_edges_added,co_occurrence_edges_added,source}、queries{declared_queries,executed_queries,answered,no_result,undetermined,unsupported,minimum_three_queries_satisfied}、incremental{preserved_node_ids,new_node_ids,previous_graph_found}、fallbacks[]（=notes+degradations 原文，供人工审计）、**method**、**notes[]**、**degradations[]**、**status_rationale**、**completeness{criteria,nodes_grounded,edges_grounded,all_criteria_met}**、deterministic、schema_version。
+
+另有 result.meta.completeness / result.meta.graph_summary / result.meta.compatible_top_level_keys，分别给出 8 条完整性判据、图规模摘要、本次暴露的兼容键清单。
 
 ### 置信上限
 
@@ -340,7 +355,10 @@ documents、paragraphs、segments、nodes、edges、node_type_counts、relation_
 | 同关系跨篇条件不同 | 同 endpoints+relation 的多篇边条件不一致 | 各边保持 doc-scoped，记 cross_doc_condition_conflict | success |
 | 查询 op 不支持 | op 不在 8 种内 | 结果 status=unsupported_op，补足自动查询到 ≥3 | partial 仅当不足 3 个可执行 |
 | 查询无结果 | 图内无匹配 | status=no_result 并说明"材料不支持"，不编答案 | success（诚实空结果） |
-| 生成内容完全缺失 | work/generated 为空 | 降级确定性基线图（触发词边 + 共现候选），limits 写明 | partial |
+| 生成内容完全缺失 | work/generated 为空 | 交付**完整确定性基线图**（句法关系边 + 最多 6 条标注 NOT asserted 的 co_occurs 边），生产方式写入 meta.notes 与 meta.method | **success**（图完整且全部回源通过时）/ partial（仅当有真实降级） |
+| 缩写在全称/缩写间无法互推 | 首字母校验失败 | 不建别名，不合并；若同一缩写有多套全称，记 acronym_definition_conflict 并只采用首个定义 | success（冲突是正常输出） |
+| 同一指标跨篇数值不同 | 指标节点的引文数值按 doc 分组不一致 | 保留 doc-scoped 数值，写 cross_doc_value_difference，不平均、不合并 | success |
+| 截断表面（"SiO2 catalyst"） | 某候选的所有出现都被同一元素前缀修饰 | 恢复完整样品名后作为实体；无法唯一恢复时保留原表面并记 screened_out | success |
 | 超过 720 秒软截止 | Stopwatch.past_soft | 在阶段边界裁剪剩余工作并写 partial | partial |
 | 输出目录只读 | mkdir/写探测失败 | 回退到当前目录下的 output/ | 视材料而定 |
 | 任何未捕获异常 | 顶层 BaseException | 写 status=failed 的契约形状 result.json + traceback_tail | failed |
@@ -353,10 +371,10 @@ documents、paragraphs、segments、nodes、edges、node_type_counts、relation_
 3. **跨篇只在概念层合并**：同一术语在多篇论文中合并为概念节点，但每篇论文的样品、条件、数值保留在各自的 doc-scoped 边里；不推断"相同物理样品"，相关查询返回 undetermined。
 4. **JSON 材料没有 bbox**：anchor.bbox=null 是如实结果，不代表抽取失败；只有 PDF 材料才有真实坐标。
 5. **page 只在真 PDF 时出现**：材料包给的是发布方段落 ID，本技能不把它换算成自建页码，也不把自建序号叫 PDF 页。
-6. **规模上限**：最多 6 份材料、单篇 140 段、总计 420 段；候选实体上限 120（结论句另计 16）；基线节点上限 90、基线边上限 200（共现边另计 60）；Agent 生成的记录不做硬截断，但应与材料规模匹配，否则 result.json 会明显变大。
-7. **关系只建立文本明确陈述的边**：共现仅作为降级模式的 co_occurs 边，且 condition 明写 "relation NOT asserted"。
+6. **规模上限**：最多 6 份材料、单篇 140 段、总计 420 段；候选实体上限 120（结论句另计 16）；基线节点上限 90、基线边上限 200；确定性共现边最多 6 条（仅在句法关系不足时补充，且逐条标注 NOT asserted）；Agent 生成的记录不做硬截断，但应与材料规模匹配，否则 result.json 会明显变大（本次零生成基线约 280 KB，其中顶层兼容键为裁剪视图）。
+7. **关系只建立文本明确陈述的边**：方向由句法位置决定，条件必须逐字出现在同句原文；共现仅作为兜底 co_occurs 边，condition 明写 "relation NOT asserted"，strength=weak(0.2)。确定性层不做跨句指代消解，因此"the catalyst"这类泛指不产生边（宁缺勿错）。
 8. **不做图像/补充材料理解**：不读取图注像素、不解析补充附件里的数值。
-9. **确定性边界**：result.json / evidence.json / graph.json / csv / graphml / 查询结果逐字节确定；run_report.json 的 elapsed_s 是唯一随机器变化的字段。
+9. **确定性边界**：同一输入 + 同一输出目录（首次运行）时，result.json / evidence.json / graph.json / csv / graphml / 查询结果逐字节确定；随机器变化的只有 run_report.json 的 elapsed_s 与 result.meta.output_files 的绝对路径；同一输出目录**第二次**运行时 previous_graph_found 会由 false 变 true（增量保号生效），这是唯一会改变 result.json 字节的语义字段。
 10. **增量只在同一输出目录**：换 out 目录会重新编号；同 out 重跑才会保留既有 node_id。
 
 ## 九、自查与验收清单
@@ -371,8 +389,12 @@ documents、paragraphs、segments、nodes、edges、node_type_counts、relation_
 | 同名冲突 | conflict_register[] | 类型不同的同名对象各自成节点且被记录 |
 | 查询 | query_outcome_bundle[] | ≥3 个可执行查询；无证据时 status=no_result/undetermined |
 | 图文件 | graph.json / nodes.csv / edges.csv / graph.graphml | 行数与节点/边数一致；graphml 可被 XML 解析器解析 |
-| 降级说明 | meta.limits、run_report.limits | 无 Agent 生成时必须出现 "no work/generated" 字样 |
-| 重复运行一致 | 两次 --all 到不同目录 | graph.json / nodes.csv / edges.csv 逐字节相同 |
+| 状态诚实 | meta.status / meta.status_rationale / meta.completeness | success 必须 8 条判据全过；无 Agent 生成时不得因为"没调用模型"就写 partial |
+| 生产方式可审计 | meta.method、meta.notes | 无 work/generated 时写明 "deterministic baseline (no agent judgement)" |
+| 降级说明 | meta.limits（=degradations）、run_report.limits | limits 只放真实降级；"无 Agent 生成"这类说明放在 meta.notes |
+| 兼容键 | result.json 顶层 nodes / edges / graph / knowledge_graph / queries / query_results / evidence_bundle / source_metadata / provenance | 每个键都存在且非空；knowledge_graph 必须是 {nodes, edges, queries, query_results, metadata} 对象而不是空对象 |
+| 契约填充率 | meta.field_fill_ratio | ≥0.9（只有确实产不出的字段才占位） |
+| 重复运行一致 | 两次 --all 到不同目录 | graph.json / nodes.csv / edges.csv / result.json（除 output_files）逐字节相同 |
 
 ## 十、最小调用示例（示例，非正式案例结果）
 
@@ -451,7 +473,7 @@ python scripts/run_kg.py --finalize --out fixture/out --work fixture/out/work
 | 失败处理 | 依赖缺失就失败 | 运行时探测 + 逐级降级 + 基线图兜底 + 启动占位 |
 | 重复运行 | 结果漂移 | 全流程确定性（run_report 除外） |
 
-**文件清单**：SKILL.md、scripts/run_kg.py（CLI 与两阶段编排）、scripts/kg_core.py（材料解析/候选/证据校验）、scripts/kg_graph.py（合并/查询/导出）、resources/kg_schema.json（实体与关系受控词表 v1.0.0）、resources/query_templates.json（可复用查询模板 v1.0.0）、tests/test_kg.py（合成 fixture 端到端自测）。运行时另依赖随包展平的 lib/ 与 scripts/ 共享内核；仅标准库，无版本锁定问题。
+**文件清单**：SKILL.md、scripts/run_kg.py（CLI 与两阶段编排）、scripts/kg_core.py（材料解析/候选/句法关系/证据校验）、scripts/kg_graph.py（合并/查询/导出）、resources/kg_schema.json（实体与关系受控词表 v1.1.0：17 类关系、4 类合并依据、5 级强度）、resources/query_templates.json（可复用查询模板 v1.1.0）、tests/test_kg.py（合成 fixture 端到端自测，含零生成基线的完整性与契约兼容断言）。运行时另依赖随包展平的 lib/ 与 scripts/ 共享内核；仅标准库，无版本锁定问题。
 
 ## 十二、踩坑（--help 不会告诉你的）
 
@@ -469,4 +491,10 @@ python scripts/run_kg.py --finalize --out fixture/out --work fixture/out/work
 12. **批工作表要小**：模型单响应 16384 token，批太大（>5000 字符）会导致一次答不完；本技能默认每批 6 段 / 4800 字符。
 13. **重复运行不要把自己的产物当材料**：result.json / graph.json 等会被材料扫描器跳过（文件名黑名单 + 输出目录子树排除），否则第二遍会把上次图谱读成"论文"。
 14. **软截止比硬预算先到**：720 秒时主动降级 partial 并落盘，比等到 900 秒被杀（占位文件）好；prepare 结束即写基线结果就是为此。
+15. **"没调用模型"不等于"部分完成"**：确定性基线图里每个节点/边都回源校验通过、查询也真的执行了，把它标成 partial 会让评测方误判为未完成。正确做法是把"生产方式"写进 meta.method / meta.notes，status 只看真实的 completeness 与 degradations。
+16. **条件片段会被化学式的数字污染**：用宽松的"数字+单位"正则扫全句时，"CO2" 会被读成 "2 m"、"CH4" 读成 "4 s"，于是边条件里出现不存在的"2 h"。条件必须由"介词+数字开头"的模式提取，并断言它逐字出现在该边自己的 quote 里。
+17. **词尾中心词不等于不同实体**："Ni/SiO2 catalyst" 与 "Ni/SiO2"、"CO2 methanation" 与 "CO2 methanation reaction" 是同一对象；但只允许剥掉词尾的通用中心词（catalyst/sample/reaction/…），不能按子串相似合并，否则 "CH4" 会和 "CH4 selectivity" 缠在一起。
+18. **缩写推导要按连字符拆字母**："X-ray diffraction (XRD)" 的首字母是 X、R、D（不是 XD），否则最该合并的缩写永远合并不上；同理"全称（缩写）"里的全称只能取真正生成该缩写的最短后缀，不能把整句当别名。
+19. **共现边要有硬上限**：把所有共现都写成边会让图看起来很大但"连得对"变差。本技能仅在句法关系不足时补 ≤6 条，并逐条写明 relation NOT asserted。
+20. **顶层兼容键不能覆盖契约字段**：契约声明的字段名优先（contract.build_result 只补充缺失键），否则隐藏案例声明的 "nodes" 会被兼容视图顶掉，反而破坏契约反射。
 

@@ -247,7 +247,16 @@ node "D:\AI-for-science\tools\dsh2trace.mjs" --session session-0945b7b3-f4d2-48d
 
 ---
 
-## 13. 评分巡检与自动迭代（2026-11-25 20:59 起）
+## 13. 评分巡检与自动迭代（**2026-11-26 08:00 起恢复自动巡检**）
+
+> 当前任务：`schedule-e4ffd09a-d2b8-47ed-9982-ee8083615e80`「次日 08:00 起巡检出分并迭代算法」。
+> 周期：每 30 分钟；首次 2026-11-26 08:00（北京），直到 11-29 24:00。
+> 20:59 建的那条（`schedule-b745adb0`）已于 22:11 按用户要求删除；本条是重建版。
+
+
+> 定时任务 `schedule-b745adb0-1bc0-4336-bc12-5eb2279c02fa` 已删除。下面的脚本与流程仍然可用，
+> 只是不再每 30 分钟自动触发；要恢复自动巡检，按 §13.2 重建任务即可。
+
 
 **定时任务** `schedule-b745adb0-1bc0-4336-bc12-5eb2279c02fa`：每 30 分钟在**本会话**跑一次巡检，
 rrule `DTSTART;TZID=Asia/Shanghai:20261125T211000 / FREQ=MINUTELY;INTERVAL=30;UNTIL=20261129T160000Z`（到 11-29 24:00 北京时间）。
@@ -267,3 +276,17 @@ $py = "C:\Users\86188\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\
 ```
 
 手动跑一次巡检任务：`playground schedule` 不暴露命令，直接在会话里跑上面的脚本即可。
+
+### 13.2 恢复自动巡检
+
+用 `schedule_create` 重建（prompt 见本节脚本行为与 `out/iteration-log.md` 头部说明）：
+
+- 周期：`DTSTART;TZID=Asia/Shanghai:<yyyyMMdd>T<HHmm>00` + `RRULE:FREQ=MINUTELY;INTERVAL=30;UNTIL=<赛程结束 UTC>`
+- 目标：`this_session`（保留 attempt 映射与上下文）
+- 提示词要点：先跑 `tools/check_scores.py`；`changed=false` 只回一行；出分才进入「诊断→一个具体改进→三道门→提交」；配额 `quota_used≥8` 停；一次只改一题。
+
+当前状态（22:10 快照）：14 个 attempt 仍全部 queued，最前位 3948，排队推进约 3.1–4.1 位/分钟。
+
+**出分 ETA（按 3.6 位/分钟）**：约 18.4 h → 11-26 **16:30 前后**；速率升到 4.3 位/分钟则约 13:40，降到 3.0 位/分钟则约 20:00。
+即**明早大概率还出不了首批分**，下午到傍晚是主窗口；任务从 08:00 开始每 30 分钟巡检，先报进度、出分后自动进入迭代。
+14 个 attempt 的队列位相差约 650（约 3 h），首个出分后其余会在数小时内陆续出分。

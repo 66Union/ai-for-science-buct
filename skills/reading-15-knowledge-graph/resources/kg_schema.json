@@ -1,6 +1,7 @@
 {
-  "version": "1.0.0",
-  "description": "Controlled vocabulary for the reading-15 literature knowledge graph. Node and relation types are closed lists; a relation outside the list is kept but flagged relation_known=false.",
+  "version": "1.1.0",
+  "description": "Controlled vocabulary for the reading-15 literature knowledge graph. Node and relation types are closed lists; a relation outside the list is kept but flagged relation_known=false. v1.1.0 adds contains and reports_metric, the surface_variant merge rule and the co_occurrence strength used by the deterministic baseline.",
+  "direction_rule": "deterministic layer: the nearest entity left of the trigger is the source, the nearest entity right of it is the target; passive patterns may swap them; a comparative such as 'higher A than B' takes the entity before 'higher' as source and the entity after 'than' as target; endpoint types are checked per relation",
   "node_types": {
     "researcher": "a person or author named in the material",
     "material": "a physical material, sample, compound, catalyst or reagent",
@@ -65,6 +66,14 @@
       "direction": "directed",
       "definition": "source is part of target"
     },
+    "contains": {
+      "direction": "directed",
+      "definition": "source is composed of / contains target"
+    },
+    "reports_metric": {
+      "direction": "directed",
+      "definition": "source reports a measured value for the target metric; values stay doc-scoped and are never averaged across papers"
+    },
     "co_occurs": {
       "direction": "undirected",
       "definition": "deterministic fallback: same paragraph; a relation is explicitly NOT asserted"
@@ -123,6 +132,15 @@
     "reduces": "improves",
     "is_a_kind_of": "is_a",
     "part_of": "part_of",
+    "contains": "contains",
+    "composed_of": "contains",
+    "consists_of": "contains",
+    "comprised_of": "contains",
+    "alternative_to": "compares_with",
+    "reports": "reports_metric",
+    "reaches": "reports_metric",
+    "achieves": "reports_metric",
+    "measures": "reports_metric",
     "co_occurrence": "co_occurs",
     "cooccurs": "co_occurs"
   },
@@ -130,6 +148,7 @@
     "same_surface": "identical normalised surface (case, hyphen, space and slash insensitive)",
     "acronym_definition": "the material itself defines acronym and full form (Full Name (ABC) pattern)",
     "agent_alias": "the alias is declared by the agent in nodes.json and matches another node label",
+    "surface_variant": "the surfaces differ only by a trailing generic head noun (catalyst / sample / reaction / method / system); merged and logged with the full member list and per-member quote",
     "never_merge": "different declared types on the same surface are a homonym: the nodes stay separate and the conflict is recorded"
   },
   "strength_levels": {
@@ -141,6 +160,12 @@
   "evidence_rules": {
     "node": "an anchor must locate the label in the cited paragraph and the quote must mention the label",
     "edge": "the quote must contain BOTH endpoint labels and be a verbatim substring of the cited paragraph",
+    "condition": "an edge condition is attached only when the extracted snippet also appears verbatim in that edge's own quote, so a stray digit from a formula cannot become a condition",
     "locator": "paragraph_id is the publisher/JATS paragraph id; a PDF page is reported only when the material is a real PDF"
+  },
+  "status_semantics": {
+    "success": "documents read, >=3 nodes and >=3 edges, every node and edge grounded, >=3 executed queries, no dropped claim, inside the time budget - a deterministic baseline that meets this is a SUCCESS",
+    "partial": "a real degradation occurred: a claim was dropped as unverifiable, fewer than three queries could be executed, or the soft deadline was reached",
+    "failed": "no readable material at all; the contract shape and the reason are still written"
   }
 }

@@ -1,6 +1,8 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Deterministic query templates the finalize phase appends when the agent declared fewer than three executable queries. {entity}, {relation}, {node_type} and {ref_label} are filled from the graph.",
+  "supported_ops": ["neighbors", "relation", "type_list", "evidence_lookup", "material_methods", "metric_reporters", "conclusion_evidence", "cross_doc_shared", "cross_doc_consistency", "path", "unresolved"],
+  "auto_query_set": "when no query is declared, finalize executes up to nine deterministic queries covering neighbours, the most frequent asserted relation, an evidence lookup, methods evidenced for a material, which papers report a metric (values kept doc-scoped), the paragraph supporting a conclusion, cross-paper shared concepts, cross-paper identity (undetermined), and the unresolved/conflict register",
   "templates": [
     {
       "op": "neighbors",

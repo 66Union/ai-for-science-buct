@@ -157,12 +157,20 @@ def main() -> int:
     else:
         pos_tier = position_tier(queue_min)
         reasons.append("queue_min=%d -> position tier %d min" % (queue_min, pos_tier))
-        interval = pos_tier
         if eta_hours is not None:
             e_tier = eta_tier(eta_hours)
             reasons.append("observed drain %.1f pos/h -> ETA %.1fh -> ETA tier %d min"
                            % (rate, eta_hours, e_tier))
-            interval = min(interval, e_tier)
+            # Time-based estimate beats raw position once the drain rate is known: a
+            # position of 2255 moving at 26 pos/h is ~3.5 days away, so polling it every
+            # 45 minutes is pure waste. Closeness only *tightens* the interval.
+            interval = e_tier
+            if queue_min <= 300:
+                interval = min(interval, 20)
+                reasons.append("queue_min <= 300 tightens to <=20 min")
+            elif queue_min <= 800:
+                interval = min(interval, 45)
+                reasons.append("queue_min <= 800 tightens to <=45 min")
         else:
             reasons.append("drain rate unknown (%d history point(s)); position tier only"
                            % len(recent))

@@ -290,11 +290,13 @@ $py = "C:\Users\86188\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\python\
 
 - `tools/check_scores.py` 每轮把一条记录追加到 `out/queue-history.json`（checked_at / queue_min / queue_max / still_queued / scored / changed / 本轮新分数与失败 id）。
 - `tools/patrol_interval.py` 读该历史，输出 JSON：`queue_min / rate_per_hour / eta_hours / recommended_interval_min / next_dtstart_local / rrule / reason`。
-  分级规则（interval = min(位置档, ETA 档)，再夹到 10–180 分钟）：
-  - 位置档：queue_min ≤300 → 10；≤800 → 20；≤1500 → 30；≤2500 → 45；≤3500 → 60；>3500 → 90 分钟。
-  - ETA 档：queue_min / 观测推进速率（positions/hour）：≤0.5h → 10；≤1h → 20；≤2h → 30；≤4h → 60；≤8h → 90；>8h → 120 分钟。
+  分级规则（**2026-11-26 22:31 细化：已知推进速率时以 ETA 档为主，位置档只在队首附近收紧**）：
+  - 位置档（速率未知时的兜底）：queue_min ≤300 → 10；≤800 → 20；≤1500 → 30；≤2500 → 45；≤3500 → 60；>3500 → 90 分钟。
+  - ETA 档（有速率时主导）：queue_min / 观测推进速率（positions/hour）：≤0.5h → 10；≤1h → 20；≤2h → 30；≤4h → 60；≤8h → 90；>8h → 120 分钟。
+  - 收紧：有 ETA 时，queue_min ≤300 再把间隔压到 ≤20 分钟、≤800 压到 ≤45 分钟。
   - 紧急：只要有 attempt 的 stage 不是 queued（已被 worker 领取/评测中），直接 10 分钟。
   - 出现 new_scores / evaluation_errors 的下一轮，覆盖为 15–20 分钟（尽快看后续结果）。
+  - 实测例子：22:31 queue_min=2255、推进 26.3 位/小时（ETA≈86h）→ 120 分钟；早先 20:11（速率未知，位置 2316）→ 45 分钟。
 - 巡检任务每轮按上述脚本输出的 rrule 调用 schedule_edit 自我重排下一次；`schedule_conflict` 就重新 schedule_list 再试一次。
 - 手动查询建议：
   ```powershell

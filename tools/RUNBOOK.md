@@ -247,17 +247,19 @@ node "D:\AI-for-science\tools\dsh2trace.mjs" --session session-0945b7b3-f4d2-48d
 
 ---
 
-## 13. 评分巡检与自动迭代（2026-11-26 16:10 由新会话接管）
+## 13. 评分巡检与自动迭代（2026-11-26 18:35 重建）
 
-> 当前任务：`schedule-e4ffd09a-d2b8-47ed-9982-ee8083615e80`「评分巡检与出分迭代（新会话接管）」。
-> 周期：每 30 分钟，直到 11-29 24:00（rrule UNTIL=20261129T160000Z）。
-> 2026-11-26 16:10 已用 schedule_edit 把 target 从旧会话 `session-0945b7b3…` 改绑到新会话 `session-45b12627-7562-4836-a146-2b7c5ba95d0f`，并重写 prompt（9 条在队、2 题已出分、恢复重交策略）。旧会话不会再被唤醒。
+> 当前任务：`schedule-c7369578-7c3a-4f12-9d8e-306934f31ea9`「评分巡检与出分迭代（18:35 重建）」。
+> 周期：每 30 分钟，首次 2026-11-26 19:00（北京），直到 11-29 24:00（rrule `DTSTART;TZID=Asia/Shanghai:20261126T190000` + `FREQ=MINUTELY;INTERVAL=30;UNTIL=20261129T160000Z`）。
+> 绑定会话 `session-45b12627-7562-4836-a146-2b7c5ba95d0f`（本会话）。
+> 历史：16:10 曾把 schedule-e4ffd09a 改绑到本会话；该任务 18:35 被用户在会话外删除（可能误删），已按用户要求用 schedule_create 重建（新 id）。
+> Prompt 已更新为当前状态：20 条在队（16:00 批 + 18:10 批）、2 题已出分、108295 被平台重新排队观察、queuePosition 不可用于估出分时间。
 
 巡检只做一件事：`python tools/check_scores.py` —— 对比 `out/score-snapshot.json`，输出
 `changed` / `new_scores` / `evaluation_errors` / `stage_changes` / `queue_min`。
 无变化时只回一行，不烧 token；一旦出分，按任务提示词进入「诊断 → 一个具体改进 → 三道门 → 提交」循环。
 
-`out/attempts.json`：**29 个 attempt** 与题目/目录的对应表（巡检和迭代都靠它）。
+`out/attempts.json`：**39 个 attempt** 与题目/目录的对应表（巡检和迭代都靠它；18:10 批 113093/113096/113098/113100/113101/113104/113105/113107/113109/113110 已补入）。
 `out/iteration-log.md`：出分后的「分数 → 诊断 → 改动 → 新 attempt」记录。
 `out/ORGANIZER-REPORT.md`：给主办方的 re-score 请求（16:20 已按最新证据重写：20 次评测 2 成功 18 失败）。
 

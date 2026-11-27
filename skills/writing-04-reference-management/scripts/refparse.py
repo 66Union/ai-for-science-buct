@@ -622,16 +622,34 @@ def _looks_like_entry_start(line: str) -> bool:
     return False
 
 
+_INLINE_BRACKET_RE = re.compile(r"\[\s*(\d{1,3})\s*\]")
+
+
 def parse_plain_reference_list(text: str, source_path: str = "") -> list:
-    """Parse a numbered reference list; unnumbered lists fall back to starts."""
+    """Parse a numbered reference list; unnumbered lists fall back to starts.
+
+    A PDF text layer frequently flattens a whole reference list onto a single
+    line ("[1] ... [2] ... [3] ..."), so the strict line-start scan below sees
+    exactly one entry and every in-text marker beyond [1] then resolves to
+    nothing. When the strict scan finds fewer than two entries, retry with the
+    bracketed marker wherever it is preceded by whitespace or sentence
+    punctuation; a title that itself contains "[3]" is rare and the trace stays
+    visible in citation_map.
+    """
     text = unicodedata.normalize("NFKC", text or "")
-    matches = list(_NUMBER_START_RE.finditer(text))
+    spans: list[tuple[int, int, int]] = []
+    for match in _NUMBER_START_RE.finditer(text):
+        spans.append((match.start(), match.end(), int(match.group(1) or match.group(2))))
+    if len(spans) < 2:
+        inline = [match for match in _INLINE_BRACKET_RE.finditer(text)
+                  if match.start() == 0 or text[match.start() - 1] in " \t\r\n;:."]
+        if len(inline) >= 2:
+            spans = [(match.start(), match.end(), int(match.group(1))) for match in inline]
     out = []
-    if len(matches) >= 2:
-        for index, match in enumerate(matches):
-            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-            raw = text[match.end():end]
-            number = int(match.group(1) or match.group(2))
+    if len(spans) >= 2:
+        for index, (start, end, number) in enumerate(spans):
+            next_start = spans[index + 1][0] if index + 1 < len(spans) else len(text)
+            raw = text[end:next_start]
             entry = _parse_single_plain(number, raw)
             entry["source_format"] = "plain"
             out.append(entry)

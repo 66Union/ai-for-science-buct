@@ -647,6 +647,7 @@ def build_state(found: dict[str, Any], out_dir: Path, work_dir: Path,
         assumption_note = ("no numbered in-text reference list was found; the bibliography file "
                            "order is assumed to equal the original citation numbering")
         uncertainty.append(assumption_note)
+
         if M.is_preprint(entries[0]) is False and len(entries) > 2:
             surnames = [R.norm_key(R.first_surname(entry)) for entry in entries]
             if surnames == sorted(surnames):
@@ -657,6 +658,33 @@ def build_state(found: dict[str, Any], out_dir: Path, work_dir: Path,
 
     # ---- citation markers and sentences --------------------------------------
     markers = R.find_citation_markers(body_text)
+    # A partially parsed embedded list (common with PDF text layers that flatten
+    # a whole reference list onto one line) leaves marker numbers unmapped even
+    # though the bibliography file may still list those works. Fill only the
+    # numbers the markers actually ask for, in ascending order, and say so.
+    missing_numbers = sorted({
+        int(number)
+        for marker in markers
+        if marker.get("style") in {"numeric", "numeric_superscript"}
+        for number in (marker.get("numbers") or [])
+        if int(number) not in number_map
+    })
+    if missing_numbers and entries:
+        used_keys = {entry["ref_key"] for entry in number_map.values()}
+        remaining = [entry for entry in entries if entry["ref_key"] not in used_keys]
+        filled = 0
+        for number in missing_numbers:
+            if not remaining:
+                break
+            number_map[number] = remaining.pop(0)
+            filled += 1
+        if filled:
+            assumption_note = ("the embedded reference list missed marker number(s) %s; "
+                               "%d of them were mapped to the remaining bibliography entries "
+                               "in bibliography order (each mapping is traceable in "
+                               "citation_map)" % ("," .join(str(n) for n in missing_numbers),
+                                                  filled))
+            uncertainty.append(assumption_note)
     resolution = R.resolve_markers(markers, entries, number_map)
     unresolved = list(resolution["unresolved"])
     sentences = _section_map(body_text, R.split_sentences(body_text))

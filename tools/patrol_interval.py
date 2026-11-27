@@ -172,6 +172,7 @@ def main() -> int:
                 interval = min(interval, 45)
                 reasons.append("queue_min <= 800 tightens to <=45 min")
         else:
+            interval = pos_tier
             reasons.append("drain rate unknown (%d history point(s)); position tier only"
                            % len(recent))
     interval = max(ns.min, min(ns.max, int(round(interval / 5.0) * 5)))

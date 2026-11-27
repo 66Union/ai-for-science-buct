@@ -213,6 +213,35 @@ def test_renumbering() -> None:
           M.collapse_numbers([1, 2]))
 
 
+def test_inline_reference_list() -> None:
+    print("inline numbered reference list (PDF text layer flattening)")
+    section = ("[1] Smith J. et al. J. Catal. 2019, 371, 112-120. "
+               "[2] Chen L. et al. ACS Catal. 2020, 10, 4455-4463. "
+               "[3] Wang H. et al. Catal. Today 2018, 316, 88-95. "
+               "[4] Garcia M. et al. Appl. Catal. A 2021, 610, 117940.")
+    entries = R.parse_plain_reference_list(section)
+    check("inline list yields four entries", len(entries) == 4, str(len(entries)))
+    check("inline list keeps the old numbers",
+          [entry.get("old_number") for entry in entries] == [1, 2, 3, 4],
+          str([entry.get("old_number") for entry in entries]))
+    check("inline list parses years",
+          [str(entry.get("year")) for entry in entries] == ["2019", "2020", "2018", "2021"],
+          str([entry.get("year") for entry in entries]))
+    normalized = [R.normalize_entry(entry, {"file": "paper.pdf", "format": "plain"}, index, set())
+                  for index, entry in enumerate(entries)]
+    body = "Earlier work reported lower selectivity [3]. Sintering explains it [4]."
+    markers = R.find_citation_markers(body)
+    number_map = {int(entry["old_number"]): entry for entry in normalized
+                  if entry.get("old_number")}
+    R.resolve_markers(markers, normalized, number_map)
+    check("all inline markers resolve",
+          all(marker.get("targets") for marker in markers),
+          str([marker.get("raw") for marker in markers if not marker.get("targets")]))
+    plan = M.plan_renumbering(markers, normalized, M.STYLE_GBT)
+    check("inline list produces a non-empty cited order", len(plan["entry_order"]) == 2,
+          str(plan["entry_order"]))
+
+
 def _prepare(fixtures: dict, name: str, tmp: Path, extra=None):
     work = tmp / (name + "-work")
     out = tmp / (name + "-out")
@@ -528,6 +557,7 @@ def main() -> int:
         test_parsers()
         test_dedupe_and_formatters()
         test_renumbering()
+        test_inline_reference_list()
         test_gbt_end_to_end()
         test_apa_end_to_end()
         test_edge_cases()
